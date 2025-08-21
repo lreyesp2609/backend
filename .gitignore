@@ -1,1 +1,5 @@
+# Variables de entorno
 .env
+
+# Archivos compilados de Python
+*.pyc

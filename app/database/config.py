@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     
     # CORS
-    allowed_origins: List[str] = ["http://localhost:3000"]
+    allowed_origins: List[str] = [
+        "http://localhost:3000",                       # navegador web local
+        "exp://127.0.0.1:19000",                       # Expo dev client iOS/Android
+        "http://192.168.1.100:19006"                   # Expo Go dispositivo físico
+    ]
     
     class Config:
         env_file = ".env"

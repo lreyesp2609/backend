@@ -24,7 +24,7 @@ def registrar_usuario(
 
     nuevo_usuario = crear_usuario(db, usuario_data)
     if not nuevo_usuario:
-        raise HTTPException(status_code=400, detail="Usuario ya existe o error al crearlo")
+        raise HTTPException(status_code=400, detail="USER_ALREADY_EXISTS")
     
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
