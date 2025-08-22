@@ -7,10 +7,10 @@ class SesionAppUsuario(Base):
     __tablename__ = "sesiones_app_usuario"
     id = Column(Integer, primary_key=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
-    refresh_token = Column(String(255), nullable=False)
+    refresh_token = Column(String(255), nullable=False, unique=True)
     expiracion = Column(DateTime, nullable=False)
-    dispositivo = Column(String(100))   # ejemplo: 'iPhone 14', 'Samsung Galaxy'
-    version_app = Column(String(20))   # versión de la app
+    dispositivo = Column(String(100))
+    version_app = Column(String(20))
     ip = Column(String(50))
     fecha_inicio = Column(DateTime, default=datetime.utcnow)
     ultima_actividad = Column(DateTime, default=datetime.utcnow)
