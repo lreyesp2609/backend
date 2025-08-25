@@ -21,7 +21,10 @@ def login(
 ):
     usuario = db.query(Usuario).filter(Usuario.usuario==correo, Usuario.activo==True).first()
     if not usuario or not verify_password(contrasenia, usuario.contrasenia):
-        raise HTTPException(status_code=401, detail="INVALID_CREDENTIALS")
+        raise HTTPException(
+        status_code=401,
+        detail="Usuario o contraseña incorrectos"
+        )
 
     access_token = create_access_token(
         {"sub": correo, "id_usuario": usuario.id, "rol": usuario.rol.nombre}

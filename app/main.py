@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database.config import settings
 from .database.database import *
 from .usuarios.models import *
+from .ubicaciones.models import *
 from .database.seed import create_default_roles
 import logging
 
@@ -73,5 +74,7 @@ if __name__ == "__main__":
 
 from .usuarios.router import router as usuarios_router
 from .login.router import router as login_router
+from .ubicaciones.router import router as ubicaciones_router
 app.include_router(usuarios_router)
 app.include_router(login_router)
+app.include_router(ubicaciones_router)

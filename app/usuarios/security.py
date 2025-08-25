@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from ..usuarios.sesiones.models import SesionAppUsuario
+
+from ..usuarios.models import Usuario
 from ..database.database import get_db
 
 # bcrypt
@@ -53,3 +54,10 @@ def decodificar_token(token: str = Depends(oauth2_scheme), db: Session = Depends
     except JWTError:
         raise HTTPException(status_code=401, detail="TOKEN_INVALIDO")
     return payload
+
+def get_current_user(payload: dict = Depends(decodificar_token), db: Session = Depends(get_db)):
+    usuario_id = payload.get("id_usuario")
+    usuario = db.query(Usuario).filter(Usuario.id == usuario_id, Usuario.activo==True).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="USUARIO_NO_ENCONTRADO")
+    return usuario
