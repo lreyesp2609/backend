@@ -72,8 +72,6 @@ def refresh_token(refresh_token: str = Form(...), db: Session = Depends(get_db))
     else:
         nuevo_refresh = refresh_token  # Mantener el mismo
 
-    # Actualizar última actividad
-    sesion.ultima_actividad = datetime.utcnow()
     db.commit()
 
     return {

@@ -20,7 +20,7 @@ def crear_sesion(
             version_app=version_app,
             ip=ip,
             fecha_inicio=datetime.utcnow(),
-            ultima_actividad=datetime.utcnow(),
+            # ❌ REMOVIDO: ultima_actividad=datetime.utcnow(),
             activo=True
         )
         db.add(sesion)
@@ -39,10 +39,12 @@ def inhabilitar_sesion(db: Session, refresh_token: str):
         db.commit()
     return sesion
 
+
 def obtener_sesion(db: Session, refresh_token: str):
     sesion = db.query(SesionAppUsuario).filter_by(refresh_token=refresh_token, activo=True).first()
     if not sesion:
         return None
+    # Solo verificar expiración del refresh token, NO inactividad
     if sesion.expiracion < datetime.utcnow():
         sesion.activo = False
         db.commit()
