@@ -1,19 +1,18 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from typing import List
+
 from app.database.database import get_db
-from ...ubicaciones.ubicaciones_historial import crud, schemas
-from ...usuarios.security import get_current_user
-from ...usuarios.models import Usuario
+from app.ubicaciones.ubicaciones_historial import crud, schemas
+from app.usuarios.security import get_current_user
 
 router = APIRouter(
     prefix="/estados_ubicacion",
     tags=["Estados de Ubicación"]
 )
 
-@router.post("/", response_model=schemas.EstadoUbicacionUsuarioResponse)
-def crear_estado_ubicacion(
-    estado: schemas.EstadoUbicacionUsuarioCreate,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user)
-):
-    return crud.crear_estado_ubicacion(db, estado, current_user)
+@router.get("/tipos-estado", response_model=List[schemas.EstadoUbicacionResponse])
+def listar_tipos_estado(db: Session = Depends(get_db)):
+    """Obtener todos los tipos de estado disponibles"""
+    from app.ubicaciones.ubicaciones_historial.models import EstadoUbicacion
+    return db.query(EstadoUbicacion).filter(EstadoUbicacion.activo == True).order_by(EstadoUbicacion.orden).all()

@@ -1,12 +1,17 @@
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database.config import settings
 from .database.database import *
+from .database.relationships import configure_relationships  # NUEVA IMPORTACIÓN
 from .usuarios.models import *
 from .ubicaciones.models import *
 from .ubicaciones.ubicaciones_historial.models import *
+# Importar los modelos de rutas para que estén disponibles
+from .ubicaciones.ubicaciones_historial.rutas.models import *
 from .database.seed import create_default_roles
-from .ubicaciones.ubicaciones_historial.seed import create_default_estado_ubicaciones
+from .ubicaciones.ubicaciones_historial.seed import create_default_estados_ubicacion
+from .ubicaciones.ubicaciones_historial.rutas.seed import seed_transportes
 import logging
 
 # Configurar logging
@@ -30,23 +35,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.on_event("startup")
 async def startup_event():
     logger.info(f"🚀 Iniciando {settings.app_name}")
     
     if test_connection():
         logger.info("✅ Base de datos conectada correctamente")
-        # Crear tablas
+        
+        # PASO 1: Configurar relaciones ANTES de crear tablas
+        configure_relationships()
+        logger.info("✅ Relaciones entre modelos configuradas")
+        
+        # PASO 2: Crear tablas
         create_tables()
-        # Crear rol por defecto
+        logger.info("✅ Tablas creadas exitosamente")
+        
+        # PASO 3: Crear datos semilla
         db = SessionLocal()
         try:
             create_default_roles(db)
+            create_default_estados_ubicacion(db)
+            
+            # 🔹 Seed de transportes
+            from app.ubicaciones.ubicaciones_historial.rutas.models import Transporte
+            from app.ubicaciones.ubicaciones_historial.rutas.seed import seed_transportes
+            seed_transportes(db)
+            logger.info("✅ Transportes creados exitosamente")
+            
         finally:
             db.close()
     else:
         logger.error("❌ No se pudo conectar a la base de datos")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -57,11 +77,28 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    rutas = []
+    rutas_por_modulo = {}
     for route in app.routes:
         if hasattr(route, "path") and route.path not in ["/", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"]:
-            rutas.append({"path": route.path, "methods": list(route.methods)})
-    return {"rutas_disponibles": rutas}
+            prefijo = route.path.strip("/").split("/")[0]
+            if prefijo not in rutas_por_modulo:
+                rutas_por_modulo[prefijo] = []
+            rutas_por_modulo[prefijo].append({"path": route.path, "methods": list(route.methods)})
+    return rutas_por_modulo
+
+
+# Incluir routers
+from .usuarios.router import router as usuarios_router
+from .login.router import router as login_router
+from .ubicaciones.router import router as ubicaciones_router
+from .ubicaciones.ubicaciones_historial.router import router as estados_ubicacion_router
+from .ubicaciones.ubicaciones_historial.rutas.routers import router as rutas_router
+
+app.include_router(usuarios_router)
+app.include_router(login_router)
+app.include_router(ubicaciones_router)
+app.include_router(estados_ubicacion_router)
+app.include_router(rutas_router)
 
 if __name__ == "__main__":
     import uvicorn
@@ -72,14 +109,3 @@ if __name__ == "__main__":
         reload=settings.debug,
         log_level="info"
     )
-
-
-from .usuarios.router import router as usuarios_router
-from .login.router import router as login_router
-from .ubicaciones.router import router as ubicaciones_router
-from .ubicaciones.ubicaciones_historial.router import router as estados_ubicacion_router
-
-app.include_router(usuarios_router)
-app.include_router(login_router)
-app.include_router(ubicaciones_router)
-app.include_router(estados_ubicacion_router)
