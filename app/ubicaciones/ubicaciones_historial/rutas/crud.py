@@ -5,12 +5,11 @@ from .schemas import RutaUsuarioCreate
 from ..models import EstadoUbicacion, EstadoUbicacionUsuario
 from fastapi import HTTPException
 from typing import List, Optional
+from ..rutas.models import Transporte
 
 class CRUDRutas:
 
-    def create_ruta(self, db: Session, ruta: RutaUsuarioCreate) -> RutaUsuario:
-        """Crear ruta automáticamente con estado 'EN_PROGRESO'"""
-        
+    def create_ruta(self, db: Session, ruta: RutaUsuarioCreate, usuario_id: int) -> RutaUsuario:
         # 1. Buscar el estado 'EN_PROGRESO'
         estado_en_progreso = db.query(EstadoUbicacion).filter(
             EstadoUbicacion.nombre == "EN_PROGRESO",
@@ -22,33 +21,47 @@ class CRUDRutas:
                 status_code=500,
                 detail="El estado 'EN_PROGRESO' no existe en la base de datos"
             )
-        
+
         # 2. Crear o encontrar EstadoUbicacionUsuario
         estado_usuario = db.query(EstadoUbicacionUsuario).filter(
             EstadoUbicacionUsuario.ubicacion_id == ruta.ubicacion_id,
-            EstadoUbicacionUsuario.usuario_id == ruta.usuario_id,
+            EstadoUbicacionUsuario.usuario_id == usuario_id,
             EstadoUbicacionUsuario.estado_ubicacion_id == estado_en_progreso.id
         ).first()
         
         if not estado_usuario:
             estado_usuario = EstadoUbicacionUsuario(
                 ubicacion_id=ruta.ubicacion_id,
-                usuario_id=ruta.usuario_id,
+                usuario_id=usuario_id,
                 estado_ubicacion_id=estado_en_progreso.id,
                 duracion_segundos=0.0
             )
             db.add(estado_usuario)
-            db.flush()  # Obtener ID sin commit completo
+            db.flush()
+        
+        # 3. Verificar transporte por nombre
+        transporte = db.query(Transporte).filter(
+            Transporte.nombre == ruta.transporte_texto
+        ).first()
+        
+        if not transporte:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El transporte '{ruta.transporte_texto}' no existe en la base de datos"
+            )
+        
+        # 4. Crear la ruta usando el id real
+        return self._create_ruta_internal(db, ruta, estado_usuario.id, transporte.id)
 
-        # 3. Crear la ruta usando estado_usuario.id
-        return self._create_ruta_internal(db, ruta, estado_usuario.id)
-    
-    def _create_ruta_internal(self, db: Session, ruta: RutaUsuarioCreate, estado_id: int) -> RutaUsuario:
+
+    def _create_ruta_internal(
+        self, db: Session, ruta: RutaUsuarioCreate, estado_id: int, transporte_id: int
+    ) -> RutaUsuario:
         """Método interno para crear la ruta con sus segmentos y pasos"""
         try:
             db_ruta = RutaUsuario(
                 estado_id=estado_id,
-                transporte_id=ruta.transporte_id,  # <-- asignar transporte
+                transporte_id=transporte_id,  # ahora viene del nombre
                 distancia_total=ruta.distancia_total,
                 duracion_total=ruta.duracion_total,
                 geometria=ruta.geometria,
@@ -82,6 +95,7 @@ class CRUDRutas:
                 status_code=400,
                 detail=f"Error de integridad en la base de datos: {str(e)}"
             )
+
     
     def get_ruta(self, db: Session, ruta_id: int) -> Optional[RutaUsuario]:
         return db.query(RutaUsuario).filter(RutaUsuario.id == ruta_id).first()

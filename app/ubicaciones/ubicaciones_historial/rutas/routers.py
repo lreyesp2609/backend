@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+
+from ....usuarios.security import get_current_user
 from ....database.database import get_db
 from .schemas import RutaUsuarioCreate, RutaUsuarioRead
 from .crud import crud_rutas
@@ -12,10 +14,13 @@ router = APIRouter(prefix="/rutas", tags=["Rutas"])
              status_code=status.HTTP_201_CREATED,
              summary="Crear nueva ruta",
              description="Crea una nueva ruta y asigna automáticamente el estado EN_PROGRESO")
-def create_ruta(ruta: RutaUsuarioCreate, db: Session = Depends(get_db)):
-    """Crear una nueva ruta de usuario con estado automático"""
+def create_ruta(
+    ruta: RutaUsuarioCreate, 
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)   # <--- aquí
+):
     try:
-        return crud_rutas.create_ruta(db, ruta)
+        return crud_rutas.create_ruta(db, ruta, current_user.id)  # <--- pásalo explícito
     except HTTPException:
         raise
     except Exception as e:

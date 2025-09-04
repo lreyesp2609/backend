@@ -39,9 +39,8 @@ class RutaUsuarioBase(BaseModel):
     fecha_fin: Optional[datetime] = Field(None, description="Fecha y hora de finalización")
 
 class RutaUsuarioCreate(RutaUsuarioBase):
-    usuario_id: int
     ubicacion_id: int
-    transporte_id: int
+    transporte_texto: str
     segmentos: List[SegmentoRutaCreate]
 
 class RutaUsuarioRead(RutaUsuarioBase):

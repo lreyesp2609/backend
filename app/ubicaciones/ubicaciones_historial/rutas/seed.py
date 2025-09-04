@@ -3,9 +3,9 @@ from .models import Transporte
 
 def seed_transportes(db: Session):
     transportes = [
-        {"nombre": "walking", "descripcion": "A pie"},
-        {"nombre": "driving", "descripcion": "Automóvil"},
-        {"nombre": "cycling", "descripcion": "Bicicleta"}
+        {"nombre": "foot-walking", "descripcion": "Caminar"},
+        {"nombre": "driving-car", "descripcion": "Carro"},
+        {"nombre": "cycling-regular", "descripcion": "Bicicleta"}
     ]
 
     for t in transportes:
