@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .models import RutaUsuario, SegmentoRuta, PasoRuta
@@ -102,27 +103,54 @@ class CRUDRutas:
     
     def list_rutas(self, db: Session, skip: int = 0, limit: int = 100) -> List[RutaUsuario]:
         return db.query(RutaUsuario).offset(skip).limit(limit).all()
-    
-    def delete_ruta(self, db: Session, ruta_id: int) -> bool:
-        ruta = db.query(RutaUsuario).filter(RutaUsuario.id == ruta_id).first()
-        if not ruta:
-            return False
-        try:
-            db.delete(ruta)
-            db.commit()
-            return True
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Error al eliminar la ruta: {str(e)}"
-            )
 
     def get_tipos_estados_disponibles(self, db: Session):
         return db.query(EstadoUbicacion).filter(EstadoUbicacion.activo == True).order_by(EstadoUbicacion.orden).all()
     
     def get_estados_usuario_disponibles(self, db: Session):
         return db.query(EstadoUbicacionUsuario).all()
+    
+
+    def finalizar_ruta(self, db: Session, ruta_id: int) -> RutaUsuario:
+        ruta = db.query(RutaUsuario).filter(RutaUsuario.id == ruta_id).first()
+        if not ruta:
+            raise HTTPException(status_code=404, detail="Ruta no encontrada")
+        
+        ruta.fecha_fin = datetime.utcnow()  # marcar fin de la ruta
+        db.commit()
+        db.refresh(ruta)
+        return ruta
+    
+    def cancelar_ruta(self, db: Session, ruta_id: int) -> Optional[RutaUsuario]:
+        ruta = db.query(RutaUsuario).filter(RutaUsuario.id == ruta_id).first()
+        if not ruta:
+            return None
+
+        # 1. Buscar estado CANCELADA
+        estado_cancelada = db.query(EstadoUbicacion).filter(
+            EstadoUbicacion.nombre == "CANCELADA",
+            EstadoUbicacion.activo == True
+        ).first()
+
+        if not estado_cancelada:
+            raise HTTPException(status_code=500, detail="Estado 'CANCELADA' no existe")
+
+        # 2. Actualizar la ruta
+        ruta.fecha_fin = datetime.utcnow()
+        db.commit()
+        db.refresh(ruta)
+
+        # 3. Actualizar el EstadoUbicacionUsuario
+        estado_usuario = db.query(EstadoUbicacionUsuario).filter(
+            EstadoUbicacionUsuario.id == ruta.estado_id
+        ).first()
+
+        if estado_usuario:
+            estado_usuario.estado_ubicacion_id = estado_cancelada.id
+            db.commit()
+            db.refresh(estado_usuario)
+
+        return ruta
 
 # Instancia para usar en el router
 crud_rutas = CRUDRutas()

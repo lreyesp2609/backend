@@ -7,6 +7,7 @@ from .database.relationships import configure_relationships  # NUEVA IMPORTACIÓ
 from .usuarios.models import *
 from .ubicaciones.models import *
 from .ubicaciones.ubicaciones_historial.models import *
+from .services.models import *
 # Importar los modelos de rutas para que estén disponibles
 from .ubicaciones.ubicaciones_historial.rutas.models import *
 from .database.seed import create_default_roles
@@ -93,12 +94,15 @@ from .login.router import router as login_router
 from .ubicaciones.router import router as ubicaciones_router
 from .ubicaciones.ubicaciones_historial.router import router as estados_ubicacion_router
 from .ubicaciones.ubicaciones_historial.rutas.routers import router as rutas_router
+from .services.router import router as services_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
 app.include_router(ubicaciones_router)
 app.include_router(estados_ubicacion_router)
 app.include_router(rutas_router)
+app.include_router(services_router)
+
 
 if __name__ == "__main__":
     import uvicorn

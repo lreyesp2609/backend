@@ -56,16 +56,13 @@ def list_rutas(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
         )
     return crud_rutas.list_rutas(db, skip=skip, limit=limit)
 
-@router.delete("/{ruta_id}", 
-              response_model=dict,
-              summary="Eliminar ruta",
-              description="Elimina una ruta específica por su ID")
-def delete_ruta(ruta_id: int, db: Session = Depends(get_db)):
-    """Eliminar una ruta por ID"""
-    success = crud_rutas.delete_ruta(db, ruta_id)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"Ruta con ID {ruta_id} no encontrada"
-        )
-    return {"message": f"Ruta {ruta_id} eliminada correctamente"}
+@router.post("/{ruta_id}/finalizar", response_model=RutaUsuarioRead)
+def finalizar_ruta_endpoint(ruta_id: int, db: Session = Depends(get_db)):
+    return crud_rutas.finalizar_ruta(db, ruta_id)
+
+@router.post("/{ruta_id}/cancelar", response_model=RutaUsuarioRead)
+def cancelar_ruta(ruta_id: int, db: Session = Depends(get_db)):
+    ruta = crud_rutas.cancelar_ruta(db, ruta_id)
+    if not ruta:
+        raise HTTPException(status_code=404, detail="Ruta no encontrada")
+    return ruta
