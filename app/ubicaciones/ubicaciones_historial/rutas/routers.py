@@ -17,10 +17,16 @@ router = APIRouter(prefix="/rutas", tags=["Rutas"])
 def create_ruta(
     ruta: RutaUsuarioCreate, 
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)   # <--- aquí
+    current_user=Depends(get_current_user)
 ):
     try:
-        return crud_rutas.create_ruta(db, ruta, current_user.id)  # <--- pásalo explícito
+        # 🔥 PASAR EL tipo_ruta_usado que viene en el schema
+        return crud_rutas.create_ruta(
+            db=db, 
+            ruta=ruta, 
+            usuario_id=current_user.id,
+            tipo_ruta_usado=ruta.tipo_ruta_usado  # 🔥 AGREGAR ESTE PARÁMETRO
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -28,7 +34,7 @@ def create_ruta(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error interno del servidor: {str(e)}"
         )
-    
+
 @router.get("/{ruta_id}", 
            response_model=RutaUsuarioRead,
            summary="Obtener ruta por ID",

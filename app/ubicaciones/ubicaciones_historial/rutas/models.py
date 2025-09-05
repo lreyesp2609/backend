@@ -22,6 +22,7 @@ class RutaUsuario(Base):
     geometria = Column(String, nullable=False)
     fecha_inicio = Column(DateTime, nullable=False)
     fecha_fin = Column(DateTime, nullable=True)
+    tipo_ruta_usado = Column(String(20), nullable=True)
 
     transporte = relationship("Transporte")
     segmentos = relationship("SegmentoRuta", back_populates="ruta", cascade="all, delete-orphan")
