@@ -18,6 +18,7 @@ class CRUDRutas:
     def create_ruta(self, db: Session, ruta: RutaUsuarioCreate, usuario_id: int, tipo_ruta_usado: str = None) -> RutaUsuario:
         """
         🔥 ARQUITECTURA FINAL: Crea TANTO ruta COMO EstadoUbicacionUsuario
+        Lógica corregida: Solo reutilizar si está EN_PROGRESO
         """
         # 1. Buscar el estado 'EN_PROGRESO'
         estado_en_progreso = db.query(EstadoUbicacion).filter(
@@ -31,20 +32,38 @@ class CRUDRutas:
                 detail="El estado 'EN_PROGRESO' no existe en la base de datos"
             )
 
-        # 2. Crear/actualizar EstadoUbicacionUsuario (para ML y analytics)
+        # 2. Buscar EstadoUbicacionUsuario existente
         estado_usuario_existente = db.query(EstadoUbicacionUsuario).filter(
             EstadoUbicacionUsuario.ubicacion_id == ruta.ubicacion_id,
             EstadoUbicacionUsuario.usuario_id == usuario_id
         ).first()
 
+        estado_usuario = None
+
         if estado_usuario_existente:
-            # Actualizar estado existente
-            estado_usuario_existente.estado_ubicacion_id = estado_en_progreso.id
-            estado_usuario_existente.duracion_segundos = 0.0
-            estado_usuario = estado_usuario_existente
-            logger.info(f"🔄 Actualizando EstadoUbicacionUsuario existente: {estado_usuario.id}")
+            # Verificar el estado actual
+            estado_actual = db.query(EstadoUbicacion).filter(
+                EstadoUbicacion.id == estado_usuario_existente.estado_ubicacion_id
+            ).first()
+            
+            if estado_actual and estado_actual.nombre == "EN_PROGRESO":
+                # ✅ CASO 1: Ya está EN_PROGRESO - REUTILIZAR
+                estado_usuario_existente.duracion_segundos = 0.0  # Resetear duración
+                estado_usuario = estado_usuario_existente
+                logger.info(f"🔄 Reutilizando EstadoUbicacionUsuario EN_PROGRESO: {estado_usuario.id}")
+                
+            else:
+                # ✅ CASO 2: Está FINALIZADA/CANCELADA - CREAR NUEVO
+                estado_usuario = EstadoUbicacionUsuario(
+                    ubicacion_id=ruta.ubicacion_id,
+                    usuario_id=usuario_id,
+                    estado_ubicacion_id=estado_en_progreso.id,
+                    duracion_segundos=0.0
+                )
+                db.add(estado_usuario)
+                logger.info(f"✅ Creando NUEVO EstadoUbicacionUsuario (anterior estaba {estado_actual.nombre if estado_actual else 'UNKNOWN'})")
         else:
-            # Crear nuevo estado
+            # ✅ CASO 3: No existe - CREAR NUEVO
             estado_usuario = EstadoUbicacionUsuario(
                 ubicacion_id=ruta.ubicacion_id,
                 usuario_id=usuario_id,
@@ -52,7 +71,7 @@ class CRUDRutas:
                 duracion_segundos=0.0
             )
             db.add(estado_usuario)
-            logger.info(f"✅ Creando nuevo EstadoUbicacionUsuario")
+            logger.info(f"✅ Creando primer EstadoUbicacionUsuario para ubicación {ruta.ubicacion_id}")
         
         db.flush()  # Para obtener el ID
         logger.info(f"📊 EstadoUbicacionUsuario ID: {estado_usuario.id}")

@@ -100,13 +100,12 @@ class UCBService:
             # Crear registro en historial
             historial = HistorialRutas(
                 usuario_id=usuario_id,
+                ubicacion_id=ubicacion_id,
                 tipo_seleccionado=tipo_usado,
-                completada=1 if completada else 0,
-                ubicacion_id=ubicacion_id,  # Ahora se incluye ubicacion_id
                 distancia=distancia,
                 duracion=duracion,
                 fecha_inicio=datetime.utcnow(),
-                fecha_fin=datetime.utcnow() if completada else None
+                fecha_fin=datetime.utcnow() if completada else None  # Ya no necesitas el campo completada
             )
             
             self.db.add(historial)
