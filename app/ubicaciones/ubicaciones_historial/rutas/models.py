@@ -15,16 +15,21 @@ class RutaUsuario(Base):
     __tablename__ = "rutas_usuario"
 
     id = Column(Integer, primary_key=True, index=True)
-    estado_id = Column(Integer, ForeignKey("estados_ubicacion_usuario.id"))
     transporte_id = Column(Integer, ForeignKey("transportes.id"), nullable=False)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     distancia_total = Column(Float, nullable=False)
     duracion_total = Column(Float, nullable=False)
     geometria = Column(String, nullable=False)
     fecha_inicio = Column(DateTime, nullable=False)
     fecha_fin = Column(DateTime, nullable=True)
     tipo_ruta_usado = Column(String(20), nullable=True)
+    
+    estado_ruta_id = Column(Integer, ForeignKey("estados_ubicacion.id"), nullable=False, default=1)  # Estado de la RUTA
+    estado_usuario_id = Column(Integer, ForeignKey("estados_ubicacion_usuario.id"), nullable=True)  # Referencia al estado del USUARIO en esa UBICACIÓN
 
     transporte = relationship("Transporte")
+    estado_ruta = relationship("EstadoUbicacion", foreign_keys=[estado_ruta_id])
+    estado_usuario = relationship("EstadoUbicacionUsuario")
     segmentos = relationship("SegmentoRuta", back_populates="ruta", cascade="all, delete-orphan")
 
 class SegmentoRuta(Base):

@@ -19,17 +19,6 @@ def crear_estado_ubicacion(db: Session, estado_data: schemas.EstadoUbicacionUsua
     db.refresh(nuevo_estado)
     return nuevo_estado
 
-def actualizar_estado(db: Session, estado_id: int, estado_data: schemas.EstadoUbicacionUsuarioCreate):
-    estado = db.query(models.EstadoUbicacionUsuario).filter(models.EstadoUbicacionUsuario.id == estado_id).first()
-    if not estado:
-        raise HTTPException(status_code=404, detail="Estado no encontrado")
-    
-    estado.estado = estado_data.estado
-    estado.duracion_segundos = estado_data.duracion_segundos
-    db.commit()
-    db.refresh(estado)
-    return estado
-
 def listar_estados_usuario(db: Session, usuario_id: int):
     return db.query(models.EstadoUbicacionUsuario).filter(models.EstadoUbicacionUsuario.usuario_id == usuario_id).all()
 

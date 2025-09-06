@@ -47,7 +47,6 @@ class RutaUsuarioCreate(RutaUsuarioBase):
 class RutaUsuarioRead(RutaUsuarioBase):
     tipo_ruta_usado: Optional[str] = None,
     id: int
-    estado_id: int
     segmentos: List[SegmentoRutaRead]
 
     class Config:
