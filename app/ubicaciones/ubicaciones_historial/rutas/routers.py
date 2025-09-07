@@ -63,12 +63,17 @@ def list_rutas(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud_rutas.list_rutas(db, skip=skip, limit=limit)
 
 @router.post("/{ruta_id}/finalizar", response_model=RutaUsuarioRead)
-def finalizar_ruta_endpoint(ruta_id: int, db: Session = Depends(get_db)):
-    return crud_rutas.finalizar_ruta(db, ruta_id)
+def finalizar_ruta_endpoint(
+    ruta_id: int, 
+    fecha_fin: str,
+    db: Session = Depends(get_db)
+):
+    return crud_rutas.finalizar_ruta(db, ruta_id, fecha_fin)
 
 @router.post("/{ruta_id}/cancelar", response_model=RutaUsuarioRead)
-def cancelar_ruta(ruta_id: int, db: Session = Depends(get_db)):
-    ruta = crud_rutas.cancelar_ruta(db, ruta_id)
-    if not ruta:
-        raise HTTPException(status_code=404, detail="Ruta no encontrada")
-    return ruta
+def cancelar_ruta(
+    ruta_id: int, 
+    fecha_fin: str,
+    db: Session = Depends(get_db)
+):
+    return crud_rutas.cancelar_ruta(db, ruta_id, fecha_fin)

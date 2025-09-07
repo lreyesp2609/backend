@@ -26,5 +26,5 @@ class HistorialRutas(Base):
     tipo_seleccionado = Column(String(20), nullable=False)
     distancia = Column(Float, nullable=True)
     duracion = Column(Float, nullable=True)
-    fecha_inicio = Column(DateTime, default=datetime.utcnow)
+    fecha_inicio = Column(DateTime, nullable=False)
     fecha_fin = Column(DateTime, nullable=True)

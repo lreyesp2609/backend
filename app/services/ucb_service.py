@@ -64,7 +64,8 @@ class UCBService:
             return "fastest"  # fallback seguro - fastest es el más estable en ORS
     
     def actualizar_feedback(self, usuario_id: int, tipo_usado: str, completada: bool, 
-                          ubicacion_id: int = None, distancia: float = None, duracion: float = None):
+                      ubicacion_id: int = None, distancia: float = None, duracion: float = None,
+                      fecha_inicio: str = None, fecha_fin: str = None):
         """
         Actualiza el bandit con el resultado de la ruta
         Valida que el tipo_usado sea compatible con ORS
@@ -97,6 +98,29 @@ class UCBService:
                            f"usos={bandit.total_usos}, rewards={bandit.total_rewards}, "
                            f"success_rate={bandit.total_rewards/bandit.total_usos:.3f}")
             
+            import dateutil.parser
+        
+            fecha_inicio_parsed = None
+            fecha_fin_parsed = None
+            
+            if fecha_inicio:
+                try:
+                    fecha_inicio_parsed = dateutil.parser.parse(fecha_inicio)
+                except ValueError:
+                    logger.warning(f"Formato de fecha_inicio inválido: {fecha_inicio}")
+                    fecha_inicio_parsed = datetime.utcnow()  # fallback
+            else:
+                fecha_inicio_parsed = datetime.utcnow()  # fallback si no se proporciona
+                
+            if fecha_fin:
+                try:
+                    fecha_fin_parsed = dateutil.parser.parse(fecha_fin)
+                except ValueError:
+                    logger.warning(f"Formato de fecha_fin inválido: {fecha_fin}")
+                    fecha_fin_parsed = datetime.utcnow() if completada else None
+            else:
+                fecha_fin_parsed = datetime.utcnow() if completada else None
+            
             # Crear registro en historial
             historial = HistorialRutas(
                 usuario_id=usuario_id,
@@ -104,8 +128,8 @@ class UCBService:
                 tipo_seleccionado=tipo_usado,
                 distancia=distancia,
                 duracion=duracion,
-                fecha_inicio=datetime.utcnow(),
-                fecha_fin=datetime.utcnow() if completada else None  # Ya no necesitas el campo completada
+                fecha_inicio=fecha_inicio_parsed,
+                fecha_fin=fecha_fin_parsed
             )
             
             self.db.add(historial)

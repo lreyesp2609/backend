@@ -161,7 +161,7 @@ class CRUDRutas:
     def get_tipos_estados_disponibles(self, db: Session):
         return db.query(EstadoUbicacion).filter(EstadoUbicacion.activo == True).order_by(EstadoUbicacion.orden).all()
 
-    def finalizar_ruta(self, db: Session, ruta_id: int) -> RutaUsuario:
+    def finalizar_ruta(self, db: Session, ruta_id: int, fecha_fin: str) -> RutaUsuario:
         """
         🔥 ARQUITECTURA FINAL: Actualiza TANTO rutas_usuario COMO estados_ubicacion_usuario
         """
@@ -178,8 +178,14 @@ class CRUDRutas:
         if not estado_finalizada:
             raise HTTPException(status_code=500, detail="Estado 'FINALIZADA' no existe")
 
-        # 2. Actualizar la ruta
-        ruta.fecha_fin = datetime.utcnow()
+        # 2. Actualizar la ruta con la fecha recibida
+        import dateutil.parser
+        try:
+            # Parsea fechas con timezone automáticamente
+            ruta.fecha_fin = dateutil.parser.parse(fecha_fin)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Formato de fecha inválido: {fecha_fin}")
+        
         ruta.estado_ruta_id = estado_finalizada.id
         db.commit()
         db.refresh(ruta)
@@ -224,7 +230,9 @@ class CRUDRutas:
                     completada=True,
                     ubicacion_id=ubicacion_id,
                     distancia=ruta.distancia_total,
-                    duracion=ruta.duracion_total
+                    duracion=ruta.duracion_total,
+                    fecha_inicio=ruta.fecha_inicio.isoformat() if ruta.fecha_inicio else None,
+                    fecha_fin=ruta.fecha_fin.isoformat() if ruta.fecha_fin else None
                 )
                 logger.info(f"✅ BANDIT ACTUALIZADO - FINALIZADA: Usuario {ruta.usuario_id}, "
                             f"Ruta {ruta_id}, Tipo: {ruta.tipo_ruta_usado}, Ubicación: {ubicacion_id}")
@@ -235,7 +243,7 @@ class CRUDRutas:
 
         return ruta
     
-    def cancelar_ruta(self, db: Session, ruta_id: int) -> RutaUsuario:
+    def cancelar_ruta(self, db: Session, ruta_id: int, fecha_fin: str) -> RutaUsuario:
         """
         🔥 ARQUITECTURA FINAL: Actualiza TANTO rutas_usuario COMO estados_ubicacion_usuario
         """
@@ -251,9 +259,15 @@ class CRUDRutas:
         if not estado_cancelada:
             raise HTTPException(status_code=500, detail="Estado 'CANCELADA' no existe")
 
-        # Actualizar la ruta
+        # Actualizar la ruta con la fecha recibida
+        import dateutil.parser
+        try:
+            # Parsea fechas con timezone automáticamente
+            ruta.fecha_fin = dateutil.parser.parse(fecha_fin)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Formato de fecha inválido: {fecha_fin}")
+            
         ruta.estado_ruta_id = estado_cancelada.id
-        ruta.fecha_fin = datetime.utcnow()
         db.commit()
         db.refresh(ruta)
 
@@ -297,7 +311,9 @@ class CRUDRutas:
                     completada=False,  # Cancelada = False
                     ubicacion_id=ubicacion_id,
                     distancia=ruta.distancia_total,
-                    duracion=ruta.duracion_total
+                    duracion=ruta.duracion_total,
+                    fecha_inicio=ruta.fecha_inicio.isoformat() if ruta.fecha_inicio else None,
+                    fecha_fin=ruta.fecha_fin.isoformat() if ruta.fecha_fin else None
                 )
                 logger.info(f"✅ BANDIT ACTUALIZADO - CANCELADA: Usuario {ruta.usuario_id}, "
                             f"Ruta {ruta_id}, Tipo: {ruta.tipo_ruta_usado}, Ubicación: {ubicacion_id}")
