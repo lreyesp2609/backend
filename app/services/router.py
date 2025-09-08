@@ -98,6 +98,7 @@ def registrar_feedback_ruta(
 
 @router.get("/stats")
 def obtener_mis_estadisticas(
+    ubicacion_id: int = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
@@ -106,13 +107,17 @@ def obtener_mis_estadisticas(
     """
     try:
         ucb_service = UCBService(db)
-        stats = ucb_service.obtener_estadisticas(current_user.id)
+        stats = ucb_service.obtener_estadisticas(
+            usuario_id=current_user.id,
+            ubicacion_id=ubicacion_id
+        )
         return stats
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error al obtener estadísticas: {str(e)}"
         )
+
 
 @router.post("/reset-bandit")
 def resetear_mi_bandit(

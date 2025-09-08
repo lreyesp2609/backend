@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from .models import BanditSimple, HistorialRutas
 import logging
+from ..ubicaciones.ubicaciones_historial.models import EstadoUbicacionUsuario
+from ..ubicaciones.ubicaciones_historial.rutas.models import RutaUsuario
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,7 @@ class UCBService:
             for bandit in bandits:
                 if bandit.total_usos == 0:
                     logger.info(f"Usuario {usuario_id} - Explorando brazo sin uso: {bandit.tipo_ruta}")
-                    return bandit.tipo_ruta  # Explorar primero
+                    return bandit.tipo_ruta
                 
                 # Calcular UCB score
                 avg_reward = bandit.total_rewards / bandit.total_usos
@@ -55,13 +57,13 @@ class UCBService:
                     best_score = ucb_score
                     best_arm = bandit.tipo_ruta
             
-            selected_type = best_arm or "fastest"  # fallback a fastest (más confiable)
+            selected_type = best_arm or "fastest"
             logger.info(f"Usuario {usuario_id} - UCB seleccionó: {selected_type}")
             return selected_type
             
         except Exception as e:
             logger.error(f"Error en seleccionar_tipo_ruta: {e}")
-            return "fastest"  # fallback seguro - fastest es el más estable en ORS
+            return "fastest"
     
     def actualizar_feedback(self, usuario_id: int, tipo_usado: str, completada: bool, 
                       ubicacion_id: int = None, distancia: float = None, duracion: float = None,
@@ -84,7 +86,7 @@ class UCBService:
             # Actualizar el bandit correspondiente para esta ubicación específica
             bandit = self.db.query(BanditSimple).filter(
                 BanditSimple.usuario_id == usuario_id,
-                BanditSimple.ubicacion_id == ubicacion_id,  # ✅ Filtrar por ubicación también
+                BanditSimple.ubicacion_id == ubicacion_id,
                 BanditSimple.tipo_ruta == tipo_usado
             ).first()
             
@@ -108,9 +110,9 @@ class UCBService:
                     fecha_inicio_parsed = dateutil.parser.parse(fecha_inicio)
                 except ValueError:
                     logger.warning(f"Formato de fecha_inicio inválido: {fecha_inicio}")
-                    fecha_inicio_parsed = datetime.utcnow()  # fallback
+                    fecha_inicio_parsed = datetime.utcnow()
             else:
-                fecha_inicio_parsed = datetime.utcnow()  # fallback si no se proporciona
+                fecha_inicio_parsed = datetime.utcnow()
                 
             if fecha_fin:
                 try:
@@ -142,54 +144,83 @@ class UCBService:
     
     def obtener_estadisticas(self, usuario_id: int, ubicacion_id: int = None):
         """
-        Devuelve estadísticas del bandit para un usuario y ubicación específica
+        Devuelve estadísticas del bandit y resumen de movilidad para un usuario y ubicación específica
         """
         try:
-            query = self.db.query(BanditSimple).filter(
+            # 🔹 Bandits (igual)
+            query_bandits = self.db.query(BanditSimple).filter(
                 BanditSimple.usuario_id == usuario_id
             )
-            
-            # Filtrar por ubicación si se especifica
             if ubicacion_id is not None:
-                query = query.filter(BanditSimple.ubicacion_id == ubicacion_id)
-            
-            bandits = query.all()
-            
-            stats = {
-                "usuario_id": usuario_id,
-                "ubicacion_id": ubicacion_id,
-                "bandits": [],
-                "total_rutas_generadas": len(bandits)
-            }
+                query_bandits = query_bandits.filter(BanditSimple.ubicacion_id == ubicacion_id)
+            bandits = query_bandits.all()
             
             total_plays = sum(b.total_usos for b in bandits)
             
+            bandits_stats = []
             for bandit in bandits:
                 success_rate = (bandit.total_rewards / bandit.total_usos) if bandit.total_usos > 0 else 0
-                
-                bandit_stats = {
-                    "tipo_ruta": bandit.tipo_ruta,  # Nombre que espera Android
-                    "total_usos": bandit.total_usos,
-                    "total_rewards": bandit.total_rewards,
-                    "success_rate": round(success_rate, 3),
-                    "ucb_score": 0.0,  # Siempre incluir, aunque sea 0
-                    "fecha_creacion": bandit.fecha_creacion,
-                    "fecha_actualizacion": bandit.fecha_actualizacion
-                }
-                
-                # Calcular UCB score real si tiene usos
+                ucb_score = 0.0
                 if bandit.total_usos > 0 and total_plays > 0:
                     confidence = math.sqrt(2 * math.log(total_plays) / bandit.total_usos)
                     ucb_score = success_rate + confidence
-                    bandit_stats["ucb_score"] = round(ucb_score, 3)
-                
-                stats["bandits"].append(bandit_stats)
+                bandits_stats.append({
+                    "tipo_ruta": bandit.tipo_ruta,
+                    "total_usos": bandit.total_usos,
+                    "total_rewards": bandit.total_rewards,
+                    "success_rate": round(success_rate, 3),
+                    "ucb_score": round(ucb_score, 3),
+                    "fecha_creacion": bandit.fecha_creacion,
+                    "fecha_actualizacion": bandit.fecha_actualizacion
+                })
             
-            # Ordenar por UCB score (más alto primero)
-            stats["bandits"].sort(key=lambda x: x.get("ucb_score", 0), reverse=True)
+            bandits_stats.sort(key=lambda x: x["ucb_score"], reverse=True)
+
+            # 🔹 Query usando RutaUsuario (no HistorialRutas) para tener estado_ruta_id
+            query_rutas = self.db.query(RutaUsuario).filter(
+                RutaUsuario.usuario_id == usuario_id
+            )
+            if ubicacion_id is not None:
+                # Necesitas unir con EstadoUbicacionUsuario para filtrar por ubicacion_id
+                query_rutas = query_rutas.join(EstadoUbicacionUsuario).filter(
+                    EstadoUbicacionUsuario.ubicacion_id == ubicacion_id
+                )
             
+            rutas = query_rutas.all()
+
+            total_rutas = len(rutas)
+            # 🔹 CORRECCIÓN: Usar estado_ruta_id para determinar completadas vs canceladas
+            rutas_completadas = sum(1 for ruta in rutas if ruta.estado_ruta_id == 2)  # 2 = FINALIZADA
+            rutas_canceladas = sum(1 for ruta in rutas if ruta.estado_ruta_id == 3)   # 3 = CANCELADA
+
+            # Tiempo promedio solo para rutas FINALIZADAS (no canceladas)
+            tiempo_por_tipo = {}
+            for ruta in rutas:
+                if ruta.estado_ruta_id == 2:  # Solo rutas FINALIZADAS
+                    # Calcular duración real en segundos
+                    duracion_real = (ruta.fecha_fin - ruta.fecha_inicio).total_seconds()
+                    
+                    if ruta.tipo_ruta_usado not in tiempo_por_tipo:
+                        tiempo_por_tipo[ruta.tipo_ruta_usado] = []
+                    tiempo_por_tipo[ruta.tipo_ruta_usado].append(duracion_real)
+            
+            tiempo_promedio_por_tipo = {
+                tipo: round(sum(lista) / len(lista), 2) if lista else 0
+                for tipo, lista in tiempo_por_tipo.items()
+            }
+
+            stats = {
+                "usuario_id": usuario_id,
+                "ubicacion_id": ubicacion_id,
+                "bandits": bandits_stats,
+                "total_rutas_generadas": total_rutas,
+                "rutas_completadas": rutas_completadas,
+                "rutas_canceladas": rutas_canceladas,
+                "tiempo_promedio_por_tipo": tiempo_promedio_por_tipo
+            }
+
             return stats
-            
+
         except Exception as e:
             logger.error(f"Error en obtener_estadisticas: {e}")
             raise e
@@ -210,7 +241,6 @@ class UCBService:
             
             deleted_bandits = query.delete()
             
-            # Opcional: también eliminar historial
             history_query = self.db.query(HistorialRutas).filter(
                 HistorialRutas.usuario_id == usuario_id
             )
@@ -240,7 +270,7 @@ class UCBService:
         
         existing = self.db.query(BanditSimple).filter(
             BanditSimple.usuario_id == usuario_id,
-            BanditSimple.ubicacion_id == ubicacion_id  # ✅ Filtrar por ubicación también
+            BanditSimple.ubicacion_id == ubicacion_id
         ).all()
         
         if len(existing) == len(self.TIPOS_RUTA):
@@ -254,7 +284,7 @@ class UCBService:
         for tipo in tipos_faltantes:
             bandit = BanditSimple(
                 usuario_id=usuario_id, 
-                ubicacion_id=ubicacion_id,  # ✅ Incluir ubicacion_id
+                ubicacion_id=ubicacion_id,
                 tipo_ruta=tipo,
                 total_usos=0,
                 total_rewards=0
@@ -278,7 +308,7 @@ class UCBService:
         Devuelve el mapeo directo para usar con OpenRouteService API
         """
         return {
-            "fastest": "fastest",      # Fastest route
-            "shortest": "shortest",    # Shortest distance
-            "recommended": "recommended"  # Balanced/recommended by ORS
+            "fastest": "fastest",
+            "shortest": "shortest",
+            "recommended": "recommended"
         }
