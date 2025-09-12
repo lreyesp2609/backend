@@ -6,6 +6,8 @@ from ....usuarios.security import get_current_user
 from ....database.database import get_db
 from .schemas import RutaUsuarioCreate, RutaUsuarioRead
 from .crud import crud_rutas
+from typing import List, Optional
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/rutas", tags=["Rutas"])
 
@@ -62,13 +64,28 @@ def list_rutas(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
         )
     return crud_rutas.list_rutas(db, skip=skip, limit=limit)
 
-@router.post("/{ruta_id}/finalizar", response_model=RutaUsuarioRead)
+class FinalizarRutaRequest(BaseModel):
+    fecha_fin: str
+    puntos_gps: Optional[List[dict]] = None
+    siguio_ruta_recomendada: Optional[bool] = None
+    porcentaje_similitud: Optional[float] = None
+
+@router.post("/{ruta_id}/finalizar", response_model=dict)
 def finalizar_ruta_endpoint(
     ruta_id: int, 
-    fecha_fin: str,
-    db: Session = Depends(get_db)
+    request: FinalizarRutaRequest,
+    db: Session = Depends(get_db),
 ):
-    return crud_rutas.finalizar_ruta(db, ruta_id, fecha_fin)
+    resultado = crud_rutas.finalizar_ruta(
+        db, 
+        ruta_id, 
+        request.fecha_fin,
+        request.puntos_gps,
+        request.siguio_ruta_recomendada,
+        request.porcentaje_similitud
+    )
+    
+    return resultado
 
 @router.post("/{ruta_id}/cancelar", response_model=RutaUsuarioRead)
 def cancelar_ruta(

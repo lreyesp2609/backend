@@ -7,10 +7,10 @@ from ..models import EstadoUbicacion, EstadoUbicacionUsuario
 from fastapi import HTTPException
 from typing import List, Optional
 from ..rutas.models import Transporte
-# 🔥 NUEVOS IMPORTS
-from ....services.ucb_service import UCBService
-import logging
 
+from ....services.ucb_service import UCBService
+from ....services.detector_desobediencia import DetectorDesobedienciaService, convertir_puntos_gps_a_geometria
+import logging
 logger = logging.getLogger(__name__)
 
 class CRUDRutas:
@@ -160,16 +160,23 @@ class CRUDRutas:
 
     def get_tipos_estados_disponibles(self, db: Session):
         return db.query(EstadoUbicacion).filter(EstadoUbicacion.activo == True).order_by(EstadoUbicacion.orden).all()
+    
+    def finalizar_ruta(self, db: Session, ruta_id: int, fecha_fin: str, 
+                       puntos_gps: List[dict] = None, 
+                       siguio_ruta_recomendada: bool = None,
+                       porcentaje_similitud: float = None):
+        """
+        Finaliza ruta y detecta desobediencia - VERSIÓN CORREGIDA
+        """
+        logger.info(f"Finalizando ruta {ruta_id} - GPS recibidos: {len(puntos_gps) if puntos_gps else 0}")
+        logger.info(f"RECIBIDO desde Android: siguio={siguio_ruta_recomendada}, porcentaje={porcentaje_similitud}")
 
-    def finalizar_ruta(self, db: Session, ruta_id: int, fecha_fin: str) -> RutaUsuario:
-        """
-        🔥 ARQUITECTURA FINAL: Actualiza TANTO rutas_usuario COMO estados_ubicacion_usuario
-        """
+        # 1. VALIDAR RUTA
         ruta = db.query(RutaUsuario).filter(RutaUsuario.id == ruta_id).first()
         if not ruta:
             raise HTTPException(status_code=404, detail="Ruta no encontrada")
         
-        # 1. Buscar estado FINALIZADA
+        # 2. ESTADO FINALIZADA
         estado_finalizada = db.query(EstadoUbicacion).filter(
             EstadoUbicacion.nombre == "FINALIZADA",
             EstadoUbicacion.activo == True
@@ -178,10 +185,9 @@ class CRUDRutas:
         if not estado_finalizada:
             raise HTTPException(status_code=500, detail="Estado 'FINALIZADA' no existe")
 
-        # 2. Actualizar la ruta con la fecha recibida
+        # 3. ACTUALIZAR FECHA FIN
         import dateutil.parser
         try:
-            # Parsea fechas con timezone automáticamente
             ruta.fecha_fin = dateutil.parser.parse(fecha_fin)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Formato de fecha inválido: {fecha_fin}")
@@ -190,7 +196,8 @@ class CRUDRutas:
         db.commit()
         db.refresh(ruta)
 
-        # 3. Actualizar EstadoUbicacionUsuario si existe la referencia
+        # 4. ACTUALIZAR ESTADO UBICACIÓN
+        ubicacion_id = None
         if ruta.estado_usuario_id:
             estado_usuario = db.query(EstadoUbicacionUsuario).filter(
                 EstadoUbicacionUsuario.id == ruta.estado_usuario_id
@@ -198,32 +205,19 @@ class CRUDRutas:
 
             if estado_usuario:
                 estado_usuario.estado_ubicacion_id = estado_finalizada.id
-                # Calcular duración si es necesario
+                ubicacion_id = estado_usuario.ubicacion_id
+                
                 if ruta.fecha_inicio and ruta.fecha_fin:
                     duracion = (ruta.fecha_fin - ruta.fecha_inicio).total_seconds()
                     estado_usuario.duracion_segundos = duracion
                 
                 db.commit()
                 db.refresh(estado_usuario)
-                logger.info(f"✅ EstadoUbicacionUsuario {estado_usuario.id} actualizado a FINALIZADA")
-            else:
-                logger.warning(f"⚠️ EstadoUbicacionUsuario {ruta.estado_usuario_id} no encontrado")
-        else:
-            logger.warning(f"⚠️ Ruta {ruta_id} no tiene estado_usuario_id")
 
-        # 4. Actualizar Bandit ML
+        # 5. ACTUALIZAR BANDIT ML
         try:
             if ruta.tipo_ruta_usado and ruta.usuario_id:
                 ucb_service = UCBService(db)
-                # Buscar ubicacion_id a través del EstadoUbicacionUsuario
-                ubicacion_id = None
-                if ruta.estado_usuario_id:
-                    estado_usuario = db.query(EstadoUbicacionUsuario).filter(
-                        EstadoUbicacionUsuario.id == ruta.estado_usuario_id
-                    ).first()
-                    if estado_usuario:
-                        ubicacion_id = estado_usuario.ubicacion_id
-
                 ucb_service.actualizar_feedback(
                     usuario_id=ruta.usuario_id,
                     tipo_usado=ruta.tipo_ruta_usado,
@@ -234,15 +228,85 @@ class CRUDRutas:
                     fecha_inicio=ruta.fecha_inicio.isoformat() if ruta.fecha_inicio else None,
                     fecha_fin=ruta.fecha_fin.isoformat() if ruta.fecha_fin else None
                 )
-                logger.info(f"✅ BANDIT ACTUALIZADO - FINALIZADA: Usuario {ruta.usuario_id}, "
-                            f"Ruta {ruta_id}, Tipo: {ruta.tipo_ruta_usado}, Ubicación: {ubicacion_id}")
-            else:
-                logger.warning(f"⚠️ Ruta {ruta_id} no tiene tipo_ruta_usado o usuario_id")
         except Exception as e:
-            logger.error(f"❌ Error actualizando bandit en finalizar_ruta {ruta_id}: {e}")
+            logger.error(f"Error actualizando bandit: {e}")
 
-        return ruta
-    
+        # 6. DETECTAR DESOBEDIENCIA
+        resultado_desobediencia = {
+            "debe_alertar": False, 
+            "mensaje": None, 
+            "similitud": 0,
+            "desobediencias_consecutivas": 0,
+            "es_ruta_similar": False,
+            "detalles_analisis": {}
+        }
+        
+        if puntos_gps and len(puntos_gps) > 0:
+            try:
+                # Importar el servicio actualizado
+                from ....services.detector_desobediencia import DetectorDesobedienciaService, convertir_puntos_gps_a_geometria
+                detector = DetectorDesobedienciaService(db)
+                ruta_real_geometria = convertir_puntos_gps_a_geometria(puntos_gps)
+                
+                if ruta_real_geometria and ruta.geometria:
+                    # IMPORTANTE: Limpiar el polyline si tiene caracteres escapados
+                    geometria_limpia = ruta.geometria
+                    if '\\x' in geometria_limpia:
+                        import codecs
+                        try:
+                            geometria_limpia = codecs.decode(geometria_limpia.encode(), 'unicode_escape')
+                        except:
+                            pass
+                    
+                    resultado_desobediencia = detector.analizar_comportamiento(
+                        usuario_id=ruta.usuario_id,
+                        ruta_id=ruta_id,
+                        ubicacion_id=ubicacion_id or 0,
+                        ruta_recomendada=geometria_limpia,
+                        ruta_real=ruta_real_geometria,
+                        siguio_ruta_android=siguio_ruta_recomendada,
+                        porcentaje_android=porcentaje_similitud
+
+                    )
+                    
+                    logger.info(f"Análisis desobediencia: {resultado_desobediencia}")
+                    
+                    # Log adicional si viene valor de Android
+                    if siguio_ruta_recomendada is not None:
+                        logger.info(f"Usando cálculo de Android: siguió ruta = {siguio_ruta_recomendada}")
+                else:
+                    logger.warning("No se pudo generar geometría real o falta geometría recomendada")
+                    
+            except Exception as e:
+                logger.error(f"Error analizando desobediencia: {e}", exc_info=True)
+        else:
+            logger.info("Sin datos GPS para análisis de desobediencia")
+        
+        # 7. RESPUESTA FINAL - IMPORTANTE: Incluir campos que Android espera
+        respuesta = {
+            "success": True,
+            "ruta_id": ruta_id,
+            "alerta_desobediencia": resultado_desobediencia.get("debe_alertar", False),
+            "mensaje_alerta": resultado_desobediencia.get("mensaje", None),
+            "similitud_calculada": resultado_desobediencia.get("similitud", 0),
+            "desobediencias_consecutivas": resultado_desobediencia.get("desobediencias_consecutivas", 0),
+            "debug_info": {
+                "similitud_calculada": resultado_desobediencia.get("similitud", 0),
+                "desobediencias_consecutivas": resultado_desobediencia.get("desobediencias_consecutivas", 0),
+                "puntos_gps_procesados": len(puntos_gps) if puntos_gps else 0,
+                "tiene_geometria_recomendada": bool(ruta.geometria),
+                "ubicacion_id": ubicacion_id,
+                "es_ruta_similar": resultado_desobediencia.get("es_ruta_similar", False),
+                "detalles_analisis": resultado_desobediencia.get("detalles_analisis", {})
+            }
+        }
+        
+        # LOG IMPORTANTE para debug
+        if resultado_desobediencia.get("debe_alertar", False):
+            logger.warning(f"⚠️ ALERTA ACTIVADA para usuario {ruta.usuario_id}: {resultado_desobediencia.get('mensaje')}")
+        
+        return respuesta
+
     def cancelar_ruta(self, db: Session, ruta_id: int, fecha_fin: str) -> RutaUsuario:
         """
         🔥 ARQUITECTURA FINAL: Actualiza TANTO rutas_usuario COMO estados_ubicacion_usuario
