@@ -8,111 +8,178 @@ logger = logging.getLogger(__name__)
 
 def decodificar_polyline(polyline_str: str) -> List[Tuple[float, float]]:
     """
-    Decodifica Google Polyline con mejor manejo de errores y caracteres especiales
+    Decodifica Google Polyline con manejo robusto de errores
     """
     try:
         if not polyline_str or len(polyline_str) < 3:
-            logger.warning(f"Polyline muy corto: {polyline_str}")
+            logger.warning(f"Polyline muy corto: '{polyline_str}'")
             return []
         
-        # IMPORTANTE: Limpiar caracteres especiales que pueden interferir
-        # Remover pipes y espacios que no son parte del formato polyline
-        polyline_clean = polyline_str.replace(' ', '')
+        logger.debug(f"🔍 Decodificando polyline: '{polyline_str[:30]}...' (longitud: {len(polyline_str)})")
         
-        # Si contiene pipes en el medio (no es formato polyline puro)
-        # intentar extraer solo la parte del polyline
-        if '|' in polyline_clean:
-            # Buscar el segmento más largo que parezca un polyline
-            segments = polyline_clean.split('|')
-            for segment in segments:
-                if len(segment) > 10:  # Un polyline válido suele ser largo
-                    polyline_clean = segment
-                    break
+        # Limpiar caracteres inválidos
+        polyline_clean = ""
+        chars_removidos = 0
+        for char in polyline_str:
+            char_code = ord(char)
+            if 63 <= char_code <= 126:  # Rango válido para polyline
+                polyline_clean += char
+            else:
+                chars_removidos += 1
+        
+        if chars_removidos > 0:
+            logger.info(f"🧹 Removidos {chars_removidos} caracteres inválidos")
+        
+        if len(polyline_clean) < 3:
+            logger.warning("Polyline demasiado corto después de limpiar")
+            return []
+        
+        logger.debug(f"🧹 Polyline limpio: '{polyline_clean[:30]}...'")
         
         points = []
         index = 0
         lat = 0
         lng = 0
+        puntos_procesados = 0
         
         while index < len(polyline_clean):
-            # Decodificar latitud
-            b = 0
-            shift = 0
-            result = 0
-            
-            while True:
-                if index >= len(polyline_clean):
-                    break
-                try:
-                    b = ord(polyline_clean[index]) - 63
-                except (ValueError, IndexError):
-                    index += 1
-                    continue
-                    
-                index += 1
-                result |= (b & 0x1f) << shift
-                shift += 5
-                if b < 0x20:
-                    break
-            
-            if index >= len(polyline_clean):
-                break
+            try:
+                # Decodificar latitud
+                shift = 0
+                result = 0
                 
-            dlat = ~(result >> 1) if result & 1 else result >> 1
-            lat += dlat
-            
-            # Decodificar longitud
-            shift = 0
-            result = 0
-            
-            while True:
-                if index >= len(polyline_clean):
-                    break
-                try:
-                    b = ord(polyline_clean[index]) - 63
-                except (ValueError, IndexError):
-                    index += 1
-                    continue
+                while index < len(polyline_clean):
+                    char_code = ord(polyline_clean[index])
+                    if char_code < 63 or char_code > 126:
+                        index += 1
+                        continue
                     
-                index += 1
-                result |= (b & 0x1f) << shift
-                shift += 5
-                if b < 0x20:
-                    break
-            
-            if index > len(polyline_clean):
-                break
+                    b = char_code - 63
+                    index += 1
+                    result |= (b & 0x1f) << shift
+                    shift += 5
+                    
+                    if b < 0x20:
+                        break
                 
-            dlng = ~(result >> 1) if result & 1 else result >> 1
-            lng += dlng
-            
-            # Convertir a coordenadas reales
-            lat_real = lat / 1e5
-            lng_real = lng / 1e5
-            
-            # Validar coordenadas razonables para Ecuador
-            if -5 <= lat_real <= 2 and -82 <= lng_real <= -75:  # Límites aproximados de Ecuador
-                points.append((lat_real, lng_real))
-            else:
-                logger.warning(f"Coordenada fuera de rango: ({lat_real}, {lng_real})")
+                dlat = ~(result >> 1) if result & 1 else result >> 1
+                lat += dlat
+                
+                # Decodificar longitud
+                shift = 0
+                result = 0
+                
+                while index < len(polyline_clean):
+                    char_code = ord(polyline_clean[index])
+                    if char_code < 63 or char_code > 126:
+                        index += 1
+                        continue
+                    
+                    b = char_code - 63
+                    index += 1
+                    result |= (b & 0x1f) << shift
+                    shift += 5
+                    
+                    if b < 0x20:
+                        break
+                
+                dlng = ~(result >> 1) if result & 1 else result >> 1
+                lng += dlng
+                
+                # Convertir a coordenadas reales
+                lat_real = lat / 1e5
+                lng_real = lng / 1e5
+                
+                # Validación mundial
+                if -90 <= lat_real <= 90 and -180 <= lng_real <= 180:
+                    points.append((lat_real, lng_real))
+                    puntos_procesados += 1
+                else:
+                    logger.warning(f"Coordenada fuera de rango: ({lat_real}, {lng_real})")
+                    
+            except Exception as e:
+                logger.warning(f"Error procesando punto en índice {index}: {e}")
+                index += 1
+                continue
         
-        logger.info(f"Polyline decodificado: {len(points)} puntos válidos")
+        logger.info(f"✅ Polyline decodificado: {len(points)} puntos válidos de {puntos_procesados} procesados")
+        
+        if points:
+            logger.debug(f"🏁 Primer punto: ({points[0][0]:.6f}, {points[0][1]:.6f})")
+            logger.debug(f"🏁 Último punto: ({points[-1][0]:.6f}, {points[-1][1]:.6f})")
+        
         return points
         
     except Exception as e:
-        logger.error(f"Error decodificando polyline '{polyline_str[:20]}...': {e}")
+        logger.error(f"Error crítico decodificando polyline: {e}")
         return []
 
+
+# FUNCIÓN ALTERNATIVA: Si el polyline sigue fallando, usar esta como backup
+def parsear_geometria_con_fallback(geometria: str) -> List[Tuple[float, float]]:
+    """
+    Parsea geometría con múltiples estrategias de fallback
+    """
+    try:
+        logger.info(f"🔍 PARSEANDO GEOMETRÍA: '{geometria[:100]}...' (longitud: {len(geometria)})")
+        
+        # Estrategia 1: Formato pipe (del móvil) - PRIORIDAD ALTA
+        if "|" in geometria and "," in geometria:
+            logger.info("📱 Detectado formato pipe del móvil")
+            puntos = []
+            for punto_str in geometria.split('|'):
+                if ',' in punto_str:
+                    partes = punto_str.strip().split(',')
+                    if len(partes) >= 2:
+                        try:
+                            lat = float(partes[0])
+                            lng = float(partes[1])
+                            if -5 <= lat <= 2 and -82 <= lng <= -75:
+                                puntos.append((lat, lng))
+                        except ValueError:
+                            continue
+            
+            if puntos:
+                logger.info(f"✅ Parseado formato pipe: {len(puntos)} puntos")
+                return puntos
+        
+        # Estrategia 2: Polyline estándar
+        elif not (',' in geometria) and len(geometria) > 10:
+            logger.info("🗺️ Intentando decodificar como polyline")
+            puntos = decodificar_polyline(geometria)
+            if puntos:
+                logger.info(f"✅ Polyline decodificado: {len(puntos)} puntos")
+                return puntos
+        
+        # Estrategia 3: Limpiar y reintentar polyline
+        logger.info("🧹 Limpiando geometría y reintentando...")
+        geometria_limpia = geometria.replace('|', '').replace(' ', '').replace('\n', '')
+        
+        # Buscar el segmento más largo que parezca polyline
+        segmentos = geometria_limpia.split(',')
+        for segmento in segmentos:
+            if len(segmento) > 20:  # Un polyline válido suele ser largo
+                puntos = decodificar_polyline(segmento)
+                if puntos:
+                    logger.info(f"✅ Polyline decodificado tras limpieza: {len(puntos)} puntos")
+                    return puntos
+        
+        logger.warning("❌ No se pudo parsear la geometría con ninguna estrategia")
+        return []
+        
+    except Exception as e:
+        logger.error(f"Error parseando geometría: {e}")
+        return []
 
 class DetectorDesobedienciaService:
     def __init__(self, db: Session):
         self.db = db
-        # AJUSTES PARA RUTAS CORTAS (< 1km)
+
         self.UMBRAL_SIMILITUD = 50.0  # Más permisivo para rutas cortas
         self.ALERTAR_DESPUES_DE = 3   # Requerir más desobediencias antes de alertar
         self.TOLERANCIA_DISTANCIA = 0.050  # 50 metros de tolerancia
-        self.TOLERANCIA_RUTA_CORTA = 0.100  # 100 metros para rutas < 500m
-        self.DISTANCIA_RUTA_DIFERENTE = 0.5  # 500m = zona diferente
+        self.TOLERANCIA_RUTA_CORTA = 0.100  # 100 metros para rutas
+        self.DISTANCIA_RUTA_DIFERENTE = 1.0  # 1km = zona diferente
     
     def analizar_comportamiento(self, usuario_id: int, ruta_id: int, 
                             ubicacion_id: int, ruta_recomendada: str, ruta_real: str, 
@@ -335,51 +402,117 @@ class DetectorDesobedienciaService:
     
     def _parsear_geometria(self, geometria: str) -> List[Tuple[float, float]]:
         """
-        Parsea geometría con mejor detección de formato
+        Parsea geometría con múltiples estrategias y mejor detección de formato
         """
         try:
             if not geometria:
+                logger.warning("Geometría vacía")
                 return []
             
-            # Formato 1: Coordenadas separadas por pipe (del móvil)
+            logger.info(f"🔍 PARSEANDO: '{geometria[:60]}...' (longitud: {len(geometria)})")
+            
+            # ESTRATEGIA 1: Formato pipe del móvil (PRIORIDAD ALTA)
             if "|" in geometria and "," in geometria:
+                logger.info("📱 Detectado formato pipe del móvil")
                 puntos = []
-                for punto_str in geometria.split('|'):
+                segmentos = geometria.split('|')
+                logger.info(f"📊 Encontrados {len(segmentos)} segmentos separados por pipe")
+                
+                for i, punto_str in enumerate(segmentos):
+                    if not punto_str.strip():
+                        continue
+                        
                     if ',' in punto_str:
                         partes = punto_str.strip().split(',')
                         if len(partes) >= 2:
                             try:
-                                lat = float(partes[0])
-                                lng = float(partes[1])
-                                # Validar que estén en Ecuador
-                                if -5 <= lat <= 2 and -82 <= lng <= -75:
+                                lat = float(partes[0].strip())
+                                lng = float(partes[1].strip())
+                                
+                                # Validación mundial más amplia
+                                if -90 <= lat <= 90 and -180 <= lng <= 180:
                                     puntos.append((lat, lng))
-                            except ValueError:
+                                else:
+                                    logger.warning(f"Coordenada fuera de rango en segmento {i}: ({lat}, {lng})")
+                            except (ValueError, IndexError) as e:
+                                logger.warning(f"Error procesando segmento {i} '{punto_str}': {e}")
                                 continue
-                logger.info(f"Parseado formato pipe: {len(puntos)} puntos")
-                return puntos
-            
-            # Formato 2: Google Polyline (OpenRouteService)
-            # Un polyline válido normalmente no tiene pipes, comas ni espacios
-            elif not (',' in geometria):
-                logger.info(f"Intentando decodificar polyline...")
-                puntos = decodificar_polyline(geometria)
-                if puntos:
-                    logger.info(f"Polyline decodificado: {len(puntos)} puntos")
-                return puntos
-            
-            # Formato 3: Intentar otros formatos
-            else:
-                logger.warning(f"Formato no reconocido claramente: {geometria[:50]}")
-                # Intentar primero como polyline
-                puntos = decodificar_polyline(geometria)
-                if puntos:
-                    return puntos
-                    
-            return []
+                    else:
+                        logger.debug(f"Segmento {i} sin coma: '{punto_str}'")
                 
+                if puntos:
+                    logger.info(f"✅ Parseado formato pipe: {len(puntos)} puntos válidos")
+                    logger.info(f"🏁 Primer punto: ({puntos[0][0]:.6f}, {puntos[0][1]:.6f})")
+                    logger.info(f"🏁 Último punto: ({puntos[-1][0]:.6f}, {puntos[-1][1]:.6f})")
+                    return puntos
+                else:
+                    logger.warning("❌ No se extrajeron puntos válidos del formato pipe")
+            
+            # ESTRATEGIA 2: Polyline puro (sin comas ni pipes)
+            elif not (',' in geometria) and not ('|' in geometria) and len(geometria) > 10:
+                logger.info("🗺️ Detectado posible polyline puro")
+                puntos = decodificar_polyline(geometria)
+                if puntos:
+                    logger.info(f"✅ Polyline decodificado: {len(puntos)} puntos")
+                    return puntos
+                else:
+                    logger.warning("❌ Polyline no pudo decodificarse")
+            
+            # ESTRATEGIA 3: Limpieza y re-intento de polyline
+            logger.info("🧹 Intentando limpiar y extraer polyline...")
+            
+            # Buscar segmentos que puedan ser polyline
+            posibles_polylines = []
+            
+            # Separar por pipes y buscar segmentos largos sin comas
+            if '|' in geometria:
+                for segmento in geometria.split('|'):
+                    segmento = segmento.strip()
+                    if len(segmento) > 15 and ',' not in segmento:
+                        posibles_polylines.append(segmento)
+            
+            # También intentar con la geometría completa limpia
+            geometria_limpia = geometria.replace('|', '').replace(' ', '').replace('\n', '').replace('\t', '')
+            if len(geometria_limpia) > 15:
+                posibles_polylines.append(geometria_limpia)
+            
+            # Intentar decodificar cada posible polyline
+            for i, candidato in enumerate(posibles_polylines):
+                logger.info(f"🔄 Intentando candidato {i}: '{candidato[:30]}...' (longitud: {len(candidato)})")
+                puntos = decodificar_polyline(candidato)
+                if puntos:
+                    logger.info(f"✅ Polyline decodificado del candidato {i}: {len(puntos)} puntos")
+                    return puntos
+            
+            # ESTRATEGIA 4: Formato mixto (coordenadas y polyline)
+            logger.info("🔀 Buscando formato mixto...")
+            
+            # Si hay tanto coordenadas como posibles polylines, priorizar coordenadas
+            if "|" in geometria and "," in geometria:
+                # Ya intentamos esto arriba, pero quizás con validación más permisiva
+                puntos = []
+                for punto_str in geometria.split('|'):
+                    if ',' in punto_str and len(punto_str.split(',')) >= 2:
+                        try:
+                            partes = punto_str.strip().split(',')
+                            lat = float(partes[0].strip())
+                            lng = float(partes[1].strip())
+                            # Sin validación de rango esta vez
+                            puntos.append((lat, lng))
+                        except (ValueError, IndexError):
+                            continue
+                
+                if puntos:
+                    logger.info(f"✅ Parseado formato mixto sin validación: {len(puntos)} puntos")
+                    return puntos
+            
+            logger.error("❌ No se pudo parsear la geometría con ninguna estrategia")
+            logger.info(f"🔍 Muestra de caracteres: {[ord(c) for c in geometria[:10]]}")
+            return []
+            
         except Exception as e:
-            logger.error(f"Error parseando geometría: {e}")
+            logger.error(f"❌ Error crítico parseando geometría: {e}")
+            logger.exception("Detalles completos del error:")
             return []
     
     def _calcular_distancia_haversine(self, punto1: Tuple[float, float], punto2: Tuple[float, float]) -> float:
