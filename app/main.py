@@ -1,16 +1,14 @@
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database.config import settings
 from .database.database import *
-from .database.relationships import configure_relationships  # NUEVA IMPORTACIÓN
+from .database.relationships import configure_relationships
 from .usuarios.models import *
 from .ubicaciones.models import *
 from .ubicaciones.ubicaciones_historial.models import *
 from .services.models import *
-# Importar los modelos de rutas para que estén disponibles
 from .ubicaciones.ubicaciones_historial.rutas.models import *
-from .database.seed import create_default_roles
+from .database.seed import create_default_roles_and_admin
 from .ubicaciones.ubicaciones_historial.seed import create_default_estados_ubicacion
 from .ubicaciones.ubicaciones_historial.rutas.seed import seed_transportes
 import logging
@@ -54,7 +52,7 @@ async def startup_event():
         # PASO 3: Crear datos semilla
         db = SessionLocal()
         try:
-            create_default_roles(db)
+            create_default_roles_and_admin(db)
             create_default_estados_ubicacion(db)
             
             # 🔹 Seed de transportes
@@ -95,6 +93,7 @@ from .ubicaciones.router import router as ubicaciones_router
 from .ubicaciones.ubicaciones_historial.router import router as estados_ubicacion_router
 from .ubicaciones.ubicaciones_historial.rutas.routers import router as rutas_router
 from .services.router import router as services_router
+from .recordatorios.routers import router as recordatorios_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -102,6 +101,7 @@ app.include_router(ubicaciones_router)
 app.include_router(estados_ubicacion_router)
 app.include_router(rutas_router)
 app.include_router(services_router)
+app.include_router(recordatorios_router)
 
 
 if __name__ == "__main__":

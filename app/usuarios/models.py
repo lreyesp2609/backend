@@ -25,3 +25,4 @@ class Usuario(Base):
 
     datos_personales = relationship("DatosPersonales")
     rol = relationship("Rol")
+    reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
