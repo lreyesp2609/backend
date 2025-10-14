@@ -50,3 +50,7 @@ class Reminder(Base):
     # Relación con usuario
     user_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     user = relationship("Usuario", back_populates="reminders")
+
+    # NUEVOS CAMPOS
+    is_active = Column(Boolean, default=True)  # Para habilitar/deshabilitar
+    is_deleted = Column(Boolean, default=False)  # Para "eliminación lógica"

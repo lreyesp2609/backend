@@ -25,3 +25,24 @@ def get_user_reminders(
     current_user=Depends(get_current_user)
 ):
     return list_reminders(db, current_user.id)
+
+@router.patch("/{reminder_id}/toggle")
+def toggle_reminder(reminder_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    reminder = db.query(Reminder).filter_by(id=reminder_id, user_id=current_user.id, is_deleted=False).first()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Recordatorio no encontrado")
+    
+    reminder.is_active = not reminder.is_active
+    db.commit()
+    db.refresh(reminder)
+    return reminder
+
+@router.delete("/{reminder_id}/delete")
+def delete_reminder(reminder_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    reminder = db.query(Reminder).filter_by(id=reminder_id, user_id=current_user.id, is_deleted=False).first()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Recordatorio no encontrado")
+    
+    reminder.is_deleted = True
+    db.commit()
+    return {"detail": "Recordatorio eliminado"}

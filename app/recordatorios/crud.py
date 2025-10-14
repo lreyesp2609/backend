@@ -5,7 +5,6 @@ from .schemas import ReminderCreate
 from fastapi import HTTPException
 import locale
 
-
 try:
     locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 except locale.Error:
@@ -25,10 +24,19 @@ def create_reminder(db: Session, reminder_data: ReminderCreate, user_id: int):
                 detail="Ya existe un recordatorio con ese título"
             )
 
-        # Convertir lista de días a string separado por comas
+        # ✅ CORRECCIÓN: No convertir days, ya viene como string desde el validator
         reminder_dict = reminder_data.dict()
-        if reminder_dict.get('days'):
-            reminder_dict['days'] = ','.join(reminder_dict['days'])
+        
+        # ❌ ELIMINAR ESTAS LÍNEAS:
+        # if reminder_dict.get('days'):
+        #     reminder_dict['days'] = ','.join(reminder_dict['days'])
+        
+        # ✅ El campo 'days' ya viene como string "Lunes,Martes,..."
+        # gracias al validator normalize_days() en schemas.py
+        
+        print(f"🔍 DEBUG CREATE REMINDER:")
+        print(f"   days tipo: {type(reminder_dict.get('days'))}")
+        print(f"   days valor: {reminder_dict.get('days')}")
 
         new_reminder = Reminder(
             **reminder_dict,
@@ -38,6 +46,11 @@ def create_reminder(db: Session, reminder_data: ReminderCreate, user_id: int):
         db.add(new_reminder)
         db.commit()
         db.refresh(new_reminder)
+        
+        print(f"✅ Recordatorio guardado en BD:")
+        print(f"   ID: {new_reminder.id}")
+        print(f"   days en BD: {new_reminder.days}")
+        
         return new_reminder
 
     except HTTPException:
@@ -52,7 +65,10 @@ def create_reminder(db: Session, reminder_data: ReminderCreate, user_id: int):
     
 def list_reminders(db: Session, user_id: int):
     try:
-        reminders = db.query(Reminder).filter_by(user_id=user_id).all()
+        reminders = db.query(Reminder).filter_by(
+            user_id=user_id,
+            is_deleted=False
+        ).all()
         return reminders
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener recordatorios: {str(e)}")

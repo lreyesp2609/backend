@@ -1,5 +1,5 @@
-from pydantic import BaseModel, validator
-from typing import Optional, List
+from pydantic import BaseModel, field_validator
+from typing import Optional, List, Union
 from datetime import time as datetime_time
 from enum import Enum
 
@@ -28,7 +28,8 @@ class ReminderBase(BaseModel):
     sound: bool = False
     sound_type: Optional[SoundType] = None
     
-    days: Optional[List[str]] = None
+    # ✅ Aceptar string o lista en la entrada
+    days: Optional[Union[str, List[str]]] = None
     time: Optional[datetime_time] = None
     
     location: Optional[str] = None
@@ -36,24 +37,19 @@ class ReminderBase(BaseModel):
     longitude: Optional[float] = None
     radius: Optional[float] = None
 
-    @validator('days')
-    def validate_days(cls, v):
+    @field_validator('days')
+    @classmethod
+    def normalize_days(cls, v):
+        """Convertir days a string si viene como lista"""
         if v is None:
+            return None
+        if isinstance(v, list):
+            # Unir la lista con comas
+            return ','.join(v)
+        if isinstance(v, str):
+            # Ya es string, devolverlo tal cual
             return v
-        valid_days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        for day in v:
-            if day not in valid_days and not cls._is_valid_date(day):
-                raise ValueError(f"Día inválido: {day}")
-        return v
-    
-    @staticmethod
-    def _is_valid_date(date_str: str) -> bool:
-        try:
-            from datetime import datetime
-            datetime.strptime(date_str, "%Y-%m-%d")
-            return True
-        except:
-            return False
+        raise ValueError("days debe ser una lista o un string")
 
 class ReminderCreate(ReminderBase):
     pass
@@ -61,14 +57,28 @@ class ReminderCreate(ReminderBase):
 class ReminderOut(ReminderBase):
     id: int
     user_id: int
+    is_active: bool = True
+    is_deleted: bool = False
 
-    @validator('days', pre=True)
-    def convert_days_to_list(cls, v):
+    @field_validator('days', mode='before')
+    @classmethod
+    def convert_days_to_string(cls, v):
+        """
+        ✅ CORRECCIÓN: Mantener days como STRING en la respuesta
+        El frontend se encarga de convertirlo a lista con su DaysTypeAdapter
+        """
         if v is None:
             return None
+        
+        # Si ya es string, devolverlo tal cual
         if isinstance(v, str):
-            return [day.strip() for day in v.split(',') if day.strip()]
+            return v
+        
+        # Si por alguna razón es una lista, convertirla a string
+        if isinstance(v, list):
+            return ','.join(v)
+        
         return v
 
     class Config:
-        orm_mode = True
+        from_attributes = True
