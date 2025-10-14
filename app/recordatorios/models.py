@@ -38,7 +38,7 @@ class Reminder(Base):
     sound = Column(Boolean, default=False)
 
     # Campos de fecha y hora
-    date = Column(Date, nullable=True)
+    days = Column(String, nullable=True)
     time = Column(Time, nullable=True)
 
     # Campos de ubicación
