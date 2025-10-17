@@ -10,7 +10,7 @@ from .services.models import *
 from .ubicaciones.ubicaciones_historial.rutas.models import *
 from .database.seed import create_default_roles_and_admin
 from .ubicaciones.ubicaciones_historial.seed import create_default_estados_ubicacion
-from .ubicaciones.ubicaciones_historial.rutas.seed import seed_transportes
+from .grupos.models import *
 import logging
 
 # Configurar logging
@@ -94,6 +94,7 @@ from .ubicaciones.ubicaciones_historial.router import router as estados_ubicacio
 from .ubicaciones.ubicaciones_historial.rutas.routers import router as rutas_router
 from .services.router import router as services_router
 from .recordatorios.routers import router as recordatorios_router
+from .grupos.router import router as grupos_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -102,6 +103,7 @@ app.include_router(estados_ubicacion_router)
 app.include_router(rutas_router)
 app.include_router(services_router)
 app.include_router(recordatorios_router)
+app.include_router(grupos_router)
 
 
 if __name__ == "__main__":
