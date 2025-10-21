@@ -15,3 +15,20 @@ class GrupoOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+class MensajeIn(BaseModel):
+    contenido: str
+    tipo: str = "texto"
+
+class MensajeOut(BaseModel):
+    id: int
+    remitente_id: int
+    grupo_id: int
+    contenido: str
+    tipo: str
+    fecha_creacion: datetime
+    leido: bool
+    leido_por: int
+    
+    class Config:
+        from_attributes = True

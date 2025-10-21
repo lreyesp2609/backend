@@ -82,7 +82,13 @@ async def root():
             prefijo = route.path.strip("/").split("/")[0]
             if prefijo not in rutas_por_modulo:
                 rutas_por_modulo[prefijo] = []
-            rutas_por_modulo[prefijo].append({"path": route.path, "methods": list(route.methods)})
+            
+            methods = list(route.methods) if hasattr(route, 'methods') else ["WEBSOCKET"]
+            
+            rutas_por_modulo[prefijo].append({
+                "path": route.path, 
+                "methods": methods
+            })
     return rutas_por_modulo
 
 

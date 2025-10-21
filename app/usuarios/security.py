@@ -1,10 +1,10 @@
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
+from jose import jwt, JWTError, ExpiredSignatureError
 import os
 import secrets
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, WebSocket
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -60,4 +60,48 @@ def get_current_user(payload: dict = Depends(decodificar_token), db: Session = D
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id, Usuario.activo==True).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="USUARIO_NO_ENCONTRADO")
+    return usuario
+
+# WebSocket authentication - SIMPLIFICADO Y CORREGIDO
+async def get_current_user_ws(websocket: WebSocket, db: Session):
+    """
+    Autentica usuario desde WebSocket validando el token JWT
+    """
+    token = None
+    
+    # Extraer token del header o query params
+    auth = websocket.headers.get("authorization")
+    if auth and auth.startswith("Bearer "):
+        token = auth.split(" ", 1)[1]
+    else:
+        token = websocket.query_params.get("token")
+
+    if not token:
+        raise Exception("Token no proporcionado")
+
+    try:
+        payload = jwt.decode(
+            token, 
+            SECRET_KEY, 
+            algorithms=[ALGORITHM]
+        )
+        
+        usuario_id = payload.get("id_usuario")
+        if usuario_id is None:
+            raise Exception("Token inválido: falta id_usuario")
+        
+    except ExpiredSignatureError:
+        raise Exception("Token expirado")
+    except JWTError as e:
+        raise Exception(f"Token inválido: {str(e)}")
+
+    # Buscar usuario en la base de datos
+    usuario = db.query(Usuario).filter(
+        Usuario.id == usuario_id, 
+        Usuario.activo == True
+    ).first()
+    
+    if not usuario:
+        raise Exception("Usuario no encontrado o inactivo")
+
     return usuario

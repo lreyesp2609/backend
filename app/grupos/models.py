@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from ..database.database import Base
 
@@ -44,3 +44,33 @@ class InvitacionGrupo(Base):
     grupo = relationship("Grupo")
     creado_por = relationship("Usuario", foreign_keys=[creado_por_id])
     usado_por = relationship("Usuario", foreign_keys=[usado_por_id])
+
+class Mensaje(Base):
+    __tablename__ = "mensajes"
+    id = Column(Integer, primary_key=True, index=True)
+    remitente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    grupo_id = Column(Integer, ForeignKey("grupos.id"), nullable=False)
+    contenido = Column(Text, nullable=False)
+    tipo = Column(String(20), default="texto")  # texto, imagen, system, etc.
+    fecha_creacion = Column(DateTime, default=datetime.utcnow)
+
+    remitente = relationship("Usuario")
+    grupo = relationship("Grupo")
+    lecturas = relationship("LecturaMensaje", back_populates="mensaje", cascade="all, delete-orphan")
+
+class LecturaMensaje(Base):
+    __tablename__ = "lecturas_mensajes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    mensaje_id = Column(Integer, ForeignKey("mensajes.id", ondelete="CASCADE"), nullable=False)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False)
+    leido_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Evitar duplicados: un usuario solo puede leer un mensaje una vez
+    __table_args__ = (
+        UniqueConstraint('mensaje_id', 'usuario_id', name='uix_mensaje_usuario'),
+    )
+    
+    # Relaciones
+    mensaje = relationship("Mensaje", back_populates="lecturas")
+    usuario = relationship("Usuario")
