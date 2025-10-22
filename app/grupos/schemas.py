@@ -23,6 +23,7 @@ class MensajeIn(BaseModel):
 class MensajeOut(BaseModel):
     id: int
     remitente_id: int
+    remitente_nombre: str | None = None
     grupo_id: int
     contenido: str
     tipo: str

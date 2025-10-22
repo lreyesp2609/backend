@@ -6,7 +6,7 @@ from .crud import create_grupo
 from ..database.database import get_db
 from ..usuarios.security import get_current_user
 from datetime import datetime
-
+from ..usuarios.models import Usuario, DatosPersonales
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .WebSocket.routers import router as ws_grupos_router
@@ -90,56 +90,60 @@ def obtener_mensajes_grupo(
     db: Session = Depends(get_db), 
     current_user = Depends(get_current_user)
 ):
-    # Validaciones existentes
+    # Validar existencia del grupo
     grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
-    if not grupo: 
+    if not grupo:
         raise HTTPException(404, "Grupo no existe")
     
+    # Validar membresía o permisos
     miembro = db.query(MiembroGrupo).filter_by(
         usuario_id=current_user.id, 
         grupo_id=grupo_id, 
         activo=True
     ).first()
-    
     if not miembro and grupo.creado_por_id != current_user.id:
         raise HTTPException(403, "No perteneces a este grupo")
     
-    # 🆕 Query corregido
-    from sqlalchemy import case
+    from sqlalchemy import case, func
+
+    # 🆕 Consulta con join al remitente y sus datos personales
+    mensajes = (
+        db.query(
+            Mensaje,
+            func.sum(
+                case((LecturaMensaje.usuario_id == current_user.id, 1), else_=0)
+            ).label("leido_por_mi"),
+            func.count(LecturaMensaje.id).label("total_lecturas"),
+            DatosPersonales.nombre.label("nombre_remitente"),
+            DatosPersonales.apellido.label("apellido_remitente")
+        )
+        .join(Usuario, Usuario.id == Mensaje.remitente_id)
+        .join(DatosPersonales, DatosPersonales.id == Usuario.datos_personales_id)
+        .outerjoin(LecturaMensaje, Mensaje.id == LecturaMensaje.mensaje_id)
+        .filter(Mensaje.grupo_id == grupo_id)
+        .group_by(Mensaje.id, DatosPersonales.nombre, DatosPersonales.apellido)
+        .order_by(Mensaje.fecha_creacion.desc())
+        .limit(limit)
+        .all()
+    )
     
-    mensajes = db.query(
-        Mensaje,
-        # ✅ Verificar si el usuario actual leyó este mensaje
-        func.sum(
-            case((LecturaMensaje.usuario_id == current_user.id, 1), else_=0)
-        ).label("leido_por_mi"),
-        # ✅ Contar cuántas personas leyeron el mensaje
-        func.count(LecturaMensaje.id).label("total_lecturas")
-    ).outerjoin(
-        LecturaMensaje, 
-        Mensaje.id == LecturaMensaje.mensaje_id
-    ).filter(
-        Mensaje.grupo_id == grupo_id
-    ).group_by(
-        Mensaje.id
-    ).order_by(
-        Mensaje.fecha_creacion.desc()
-    ).limit(limit).all()
-    
-    # Formatear respuesta
+    # 🧩 Construir respuesta
     resultado = []
-    for mensaje, leido_por_mi, total_lecturas in reversed(mensajes):
-        resultado.append(MensajeOut(
-            id=mensaje.id,
-            remitente_id=mensaje.remitente_id,
-            grupo_id=mensaje.grupo_id,
-            contenido=mensaje.contenido,
-            tipo=mensaje.tipo,
-            fecha_creacion=mensaje.fecha_creacion,
-            leido=bool(leido_por_mi > 0),
-            leido_por=total_lecturas or 0
-        ))
-    
+    for mensaje, leido_por_mi, total_lecturas, nombre, apellido in reversed(mensajes):
+        resultado.append(
+            MensajeOut(
+                id=mensaje.id,
+                remitente_id=mensaje.remitente_id,
+                remitente_nombre=f"{nombre} {apellido}",  # 👈 nombre completo
+                grupo_id=mensaje.grupo_id,
+                contenido=mensaje.contenido,
+                tipo=mensaje.tipo,
+                fecha_creacion=mensaje.fecha_creacion,
+                leido=bool(leido_por_mi > 0),
+                leido_por=total_lecturas or 0
+            )
+        )
+
     return resultado
 
 @router.post("/{grupo_id}/mensajes/{mensaje_id}/marcar-leido")
