@@ -3,3 +3,4 @@
 
 # Archivos compilados de Python
 *.pyc
+/app/__pycache__
