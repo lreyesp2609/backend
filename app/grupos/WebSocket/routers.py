@@ -9,7 +9,7 @@ from jose import jwt, JWTError
 from ...database.database import SessionLocal
 from ..models import Grupo, MiembroGrupo, Mensaje, LecturaMensaje
 from ...usuarios.security import get_current_user_ws, SECRET_KEY, ALGORITHM
-from .ws_manager import WebSocketManager, UbicacionManager
+from .ws_manager import WebSocketManager, UbicacionManager, grupo_notification_manager
 
 router = APIRouter()
 manager = WebSocketManager()
@@ -204,6 +204,20 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 db.add(lectura)
                 db.commit()
                 print(f"✅ Mensaje {mensaje.id} marcado como leído por usuario {user.id}")
+
+                # 🆕 NOTIFICAR a todos los miembros del grupo sobre cambio en no leídos
+                miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
+                miembros_ids = [m.usuario_id for m in miembros]
+
+                # Agregar también al creador si no está en la lista
+                if grupo.creado_por_id not in miembros_ids:
+                    miembros_ids.append(grupo.creado_por_id)
+
+                # Notificar a cada miembro (excepto al remitente)
+                for miembro_id in miembros_ids:
+                    if miembro_id != user.id:
+                        await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
+
 
                 out = {
                     "type": "mensaje",
@@ -475,3 +489,171 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         db.close()
         user_id = user.id if user else "desconocido"
         print(f"📍 Usuario {user_id} desconectado del grupo {grupo_id} (ubicaciones)")
+
+@router.websocket("/ws/notificaciones")
+async def websocket_notificaciones(websocket: WebSocket):
+    """
+    WebSocket para recibir notificaciones globales de grupos
+    (mensajes no leídos, nuevos grupos, etc.)
+    """
+    await websocket.accept()
+    print("🔔 WebSocket de notificaciones aceptado")
+    
+    db = SessionLocal()
+    user = None
+    current_token = None
+    revalidation_task = None
+    
+    try:
+        # Extraer token
+        auth = websocket.headers.get("authorization")
+        if auth and auth.startswith("Bearer "):
+            current_token = auth.split(" ", 1)[1]
+        else:
+            current_token = websocket.query_params.get("token")
+        
+        if not current_token:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": "Token no proporcionado"
+            }))
+            await websocket.close(code=1008)
+            return
+        
+        # Autenticar
+        try:
+            user = await get_current_user_ws(websocket, db)
+            print(f"🔔 Usuario {user.id} autenticado para notificaciones")
+        except Exception as e:
+            print(f"❌ Error al autenticar: {e}")
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": f"Autenticación fallida: {str(e)}"
+            }))
+            await websocket.close(code=1008)
+            return
+        
+        # Conectar usuario
+        await grupo_notification_manager.connect_user(user.id, websocket)
+        
+        # Enviar estado inicial
+        await grupo_notification_manager.notify_unread_count_changed(user.id, db)
+        
+        # 🆕 Tarea de revalidación de token mejorada
+        async def revalidate_token():
+            """Revalida el token cada 60 segundos y muestra el tiempo de expiración"""
+            contador_checks = 0
+            ultimo_tiempo_reportado = None
+            
+            while True:
+                await asyncio.sleep(60)
+                contador_checks += 1
+                
+                try:
+                    if current_token:
+                        payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
+                        
+                        exp_timestamp = payload.get("exp")
+                        if exp_timestamp:
+                            ahora = datetime.now(timezone.utc).timestamp()
+                            tiempo_restante = exp_timestamp - ahora
+                            minutos_restantes = tiempo_restante / 60
+                            
+                            # 🆕 Solo loguear si hay cambios significativos o cada 5 checks
+                            debe_loguear = (
+                                ultimo_tiempo_reportado is None or
+                                abs(minutos_restantes - ultimo_tiempo_reportado) > 0.5 or
+                                contador_checks % 5 == 0 or
+                                minutos_restantes < 3
+                            )
+                            
+                            if debe_loguear:
+                                print(f"🔔⏱️ Token notificaciones - Check #{contador_checks}: {minutos_restantes:.1f} min restantes")
+                                ultimo_tiempo_reportado = minutos_restantes
+                            
+                            # Si expiró
+                            if tiempo_restante <= 0:
+                                print(f"🔔❌ ════════════════════════════════════════")
+                                print(f"🔔❌ TOKEN EXPIRADO hace {abs(minutos_restantes):.1f} minutos")
+                                print(f"🔔❌ Usuario: {user.id if user else 'desconocido'}")
+                                print(f"🔔❌ ════════════════════════════════════════")
+                                await websocket.send_text(json.dumps({
+                                    "type": "error",
+                                    "code": "TOKEN_EXPIRED",
+                                    "message": "Tu sesión ha expirado. Reconecta con un nuevo token."
+                                }))
+                                await websocket.close(code=1008)
+                                break
+                            
+                            # Si está por expirar (menos de 2 minutos)
+                            if tiempo_restante < 120:
+                                print(f"🔔⚠️ ════════════════════════════════════════")
+                                print(f"🔔⚠️ TOKEN POR EXPIRAR: {minutos_restantes:.1f} min")
+                                print(f"🔔⚠️ Se recomienda renovar")
+                                print(f"🔔⚠️ ════════════════════════════════════════")
+                                await websocket.send_text(json.dumps({
+                                    "type": "warning",
+                                    "code": "TOKEN_EXPIRING_SOON",
+                                    "message": "Tu sesión expirará pronto. Por favor, actualiza tu token.",
+                                    "seconds_remaining": int(tiempo_restante)
+                                }))
+                        
+                except JWTError as e:
+                    print(f"🔔❌ ════════════════════════════════════════")
+                    print(f"🔔❌ TOKEN INVÁLIDO O EXPIRADO")
+                    print(f"🔔❌ Usuario: {user.id if user else 'desconocido'}")
+                    print(f"🔔❌ Error: {e}")
+                    print(f"🔔❌ ════════════════════════════════════════")
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "code": "TOKEN_EXPIRED",
+                        "message": "Tu sesión ha expirado. Reconecta con un nuevo token."
+                    }))
+                    await websocket.close(code=1008)
+                    break
+                except Exception as e:
+                    print(f"🔔❌ Error en revalidación del token: {e}")
+                    break
+        
+        revalidation_task = asyncio.create_task(revalidate_token())
+        
+        # Mantener conexión viva
+        while True:
+            raw = await websocket.receive_text()
+            payload = json.loads(raw)
+            
+            if payload.get("action") == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+            elif payload.get("action") == "refresh_token":
+                new_token = payload.get("data", {}).get("token")
+                if new_token:
+                    try:
+                        jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
+                        current_token = new_token
+                        print(f"🔔🔄 Token de notificaciones actualizado para usuario {user.id}")
+                        await websocket.send_text(json.dumps({
+                            "type": "token_refreshed",
+                            "message": "Token actualizado correctamente"
+                        }))
+                    except JWTError:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Token inválido proporcionado"
+                        }))
+    
+    except WebSocketDisconnect:
+        print(f"🔔 WebSocket notificaciones desconectado para usuario {user.id if user else 'desconocido'}")
+    except Exception as e:
+        print(f"❌ Error en WebSocket notificaciones: {e}")
+        traceback.print_exc()
+    finally:
+        if revalidation_task:
+            revalidation_task.cancel()
+            try:
+                await revalidation_task
+            except asyncio.CancelledError:
+                print("🔔 Tarea de revalidación de token cancelada")
+        
+        if user:
+            await grupo_notification_manager.disconnect_user(user.id)
+        db.close()

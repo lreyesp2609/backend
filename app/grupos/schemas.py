@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -30,6 +31,18 @@ class MensajeOut(BaseModel):
     fecha_creacion: datetime
     leido: bool
     leido_por: int
+    
+    class Config:
+        from_attributes = True
+
+class GrupoConNoLeidos(BaseModel):
+    id: int
+    nombre: str
+    descripcion: Optional[str] = None
+    codigo_invitacion: str
+    creado_por_id: int
+    fecha_creacion: datetime
+    mensajes_no_leidos: int = 0
     
     class Config:
         from_attributes = True

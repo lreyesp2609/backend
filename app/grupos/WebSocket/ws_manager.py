@@ -2,6 +2,8 @@ from typing import Dict, Set
 from starlette.websockets import WebSocket
 import asyncio
 import json
+from ..models import Grupo, MiembroGrupo, Mensaje, LecturaMensaje
+from sqlalchemy.orm import Session
 
 class WebSocketManager:
     def __init__(self):
@@ -94,3 +96,85 @@ class UbicacionManager:
         return self.ubicaciones.get(grupo_id, {})
 
 ubicacion_manager = UbicacionManager()
+
+class GrupoNotificationManager:
+    def __init__(self):
+        # Mapea user_id -> WebSocket para notificaciones globales
+        self.user_connections: Dict[int, WebSocket] = {}
+        self.lock = asyncio.Lock()
+    
+    async def connect_user(self, user_id: int, websocket: WebSocket):
+        """Conecta un usuario para recibir notificaciones globales"""
+        async with self.lock:
+            self.user_connections[user_id] = websocket
+            print(f"🔔 Usuario {user_id} conectado a notificaciones globales")
+    
+    async def disconnect_user(self, user_id: int):
+        """Desconecta un usuario de notificaciones globales"""
+        async with self.lock:
+            self.user_connections.pop(user_id, None)
+            print(f"🔔 Usuario {user_id} desconectado de notificaciones globales")
+    
+    async def notify_unread_count_changed(self, user_id: int, db: Session):
+        """
+        Notifica a un usuario específico sobre cambios en mensajes no leídos
+        """
+        websocket = self.user_connections.get(user_id)
+        if not websocket:
+            return
+        
+        try:
+            # Calcular mensajes no leídos por grupo
+            from sqlalchemy import func, and_, or_
+            
+            grupos_query = (
+                db.query(Grupo)
+                .outerjoin(MiembroGrupo, and_(
+                    MiembroGrupo.grupo_id == Grupo.id,
+                    MiembroGrupo.usuario_id == user_id,
+                    MiembroGrupo.activo == True
+                ))
+                .filter(
+                    Grupo.is_deleted == False,
+                    or_(
+                        Grupo.creado_por_id == user_id,
+                        MiembroGrupo.id != None
+                    )
+                )
+                .all()
+            )
+            
+            grupos_no_leidos = []
+            for grupo in grupos_query:
+                count = (
+                    db.query(func.count(Mensaje.id))
+                    .outerjoin(LecturaMensaje, and_(
+                        LecturaMensaje.mensaje_id == Mensaje.id,
+                        LecturaMensaje.usuario_id == user_id
+                    ))
+                    .filter(
+                        Mensaje.grupo_id == grupo.id,
+                        Mensaje.remitente_id != user_id,
+                        LecturaMensaje.id == None
+                    )
+                    .scalar() or 0
+                )
+                
+                grupos_no_leidos.append({
+                    "grupo_id": grupo.id,
+                    "mensajes_no_leidos": count
+                })
+            
+            # Enviar notificación
+            await websocket.send_text(json.dumps({
+                "type": "unread_count_update",
+                "data": grupos_no_leidos
+            }))
+            print(f"📊 Enviado conteo de no leídos a usuario {user_id}")
+            
+        except Exception as e:
+            print(f"❌ Error al notificar usuario {user_id}: {e}")
+            await self.disconnect_user(user_id)
+
+# Instancia global
+grupo_notification_manager = GrupoNotificationManager()
