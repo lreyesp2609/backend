@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey, func
 from sqlalchemy.orm import relationship
 from ..database.database import Base
 
@@ -26,3 +26,17 @@ class Usuario(Base):
     datos_personales = relationship("DatosPersonales")
     rol = relationship("Rol")
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
+    fcm_tokens = relationship("FCMToken", back_populates="usuario", cascade="all, delete-orphan")  # ✅
+
+
+class FCMToken(Base):
+    __tablename__ = "fcm_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    token = Column(String(255), nullable=False, unique=True)
+    dispositivo = Column(String(50), default="android")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    usuario = relationship("Usuario", back_populates="fcm_tokens")

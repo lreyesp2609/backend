@@ -61,6 +61,9 @@ async def startup_event():
             seed_transportes(db)
             logger.info("✅ Transportes creados exitosamente")
             
+            # ✅ AGREGAR - Inicializar Firebase FCM
+            from app.services.fcm_service import FCMService
+            
         finally:
             db.close()
     else:
@@ -101,6 +104,7 @@ from .ubicaciones.ubicaciones_historial.rutas.routers import router as rutas_rou
 from .services.router import router as services_router
 from .recordatorios.routers import router as recordatorios_router
 from .grupos.router import router as grupos_router
+from .services.fcm_router import router as fcm_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -110,6 +114,7 @@ app.include_router(rutas_router)
 app.include_router(services_router)
 app.include_router(recordatorios_router)
 app.include_router(grupos_router)
+app.include_router(fcm_router)
 
 
 if __name__ == "__main__":

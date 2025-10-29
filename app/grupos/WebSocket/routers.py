@@ -10,6 +10,8 @@ from ...database.database import SessionLocal
 from ..models import Grupo, MiembroGrupo, Mensaje, LecturaMensaje
 from ...usuarios.security import get_current_user_ws, SECRET_KEY, ALGORITHM
 from .ws_manager import WebSocketManager, UbicacionManager, grupo_notification_manager
+from ...services.fcm_service import fcm_service  # ✅ AGREGAR
+from ...usuarios.models import FCMToken  # ✅ AGREGAR
 
 router = APIRouter()
 manager = WebSocketManager()
@@ -216,9 +218,45 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 # Notificar a cada miembro (excepto al remitente)
                 for miembro_id in miembros_ids:
                     if miembro_id != user.id:
+                        # 🔹 Notificación WebSocket (actualizar contador de no leídos)
                         await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
+                        
+                        # 🔥 NUEVO: Verificar si el usuario está conectado al WebSocket
+                        esta_conectado = await grupo_notification_manager.is_user_connected(miembro_id)
+                        
+                        # Si NO está conectado → Enviar FCM
+                        if not esta_conectado:
+                            # Obtener tokens FCM del usuario
+                            tokens_fcm = db.query(FCMToken).filter(
+                                FCMToken.usuario_id == miembro_id
+                            ).all()
+                            
+                            if tokens_fcm:
+                                # Obtener nombre del remitente
+                                nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+                                
+                                # ✅ NUEVO: Usar el método correcto con todos los datos
+                                for fcm_token in tokens_fcm:
+                                    exito = await fcm_service.enviar_notificacion_mensaje(
+                                        token=fcm_token.token,
+                                        grupo_id=grupo_id,
+                                        grupo_nombre=grupo.nombre,  # ✅ Nombre del grupo
+                                        remitente_nombre=nombre_remitente,  # ✅ CRÍTICO para acumulación
+                                        mensaje=contenido,
+                                        timestamp=int(mensaje.fecha_creacion.timestamp() * 1000)  # ✅ Timestamp real
+                                    )
+                                    
+                                    if exito:
+                                        print(f"📲 FCM enviado exitosamente a usuario {miembro_id}")
+                                        print(f"   Grupo: {grupo.nombre}")
+                                        print(f"   Remitente: {nombre_remitente}")
+                                        print(f"   Mensaje: {contenido[:30]}...")
+                                    else:
+                                        print(f"⚠️ FCM falló para usuario {miembro_id} - Token posiblemente inválido")
+                        else:
+                            print(f"ℹ️ Usuario {miembro_id} está conectado, FCM no necesario")
 
-
+                # ✅ Broadcast del mensaje a todos los conectados al WebSocket del grupo
                 out = {
                     "type": "mensaje",
                     "data": {

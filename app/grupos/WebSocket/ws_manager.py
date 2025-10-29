@@ -115,6 +115,12 @@ class GrupoNotificationManager:
             self.user_connections.pop(user_id, None)
             print(f"🔔 Usuario {user_id} desconectado de notificaciones globales")
     
+    # ✅ AGREGAR ESTE MÉTODO NUEVO
+    async def is_user_connected(self, user_id: int) -> bool:
+        """Verifica si un usuario está conectado al WebSocket de notificaciones"""
+        async with self.lock:
+            return user_id in self.user_connections
+    
     async def notify_unread_count_changed(self, user_id: int, db: Session):
         """
         Notifica a un usuario específico sobre cambios en mensajes no leídos

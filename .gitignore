@@ -4,3 +4,8 @@
 # Archivos compilados de Python
 *.pyc
 /app/__pycache__
+
+# Firebase
+firebase-credentials.json
+*firebase*.json
+app/__pycache__/main.cpython-312.pyc
