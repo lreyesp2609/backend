@@ -197,7 +197,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 db.commit()
                 db.refresh(mensaje)
 
-                # 🆕 AGREGAR: Marcar automáticamente como leído para el remitente
+                # 🆕 Marcar automáticamente como leído para el remitente
                 lectura = LecturaMensaje(
                     mensaje_id=mensaje.id,
                     usuario_id=user.id,
@@ -207,7 +207,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 db.commit()
                 print(f"✅ Mensaje {mensaje.id} marcado como leído por usuario {user.id}")
 
-                # 🆕 NOTIFICAR a todos los miembros del grupo sobre cambio en no leídos
+                # 🆕 Obtener todos los miembros del grupo
                 miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
                 miembros_ids = [m.usuario_id for m in miembros]
 
@@ -215,46 +215,90 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 if grupo.creado_por_id not in miembros_ids:
                     miembros_ids.append(grupo.creado_por_id)
 
-                # Notificar a cada miembro (excepto al remitente)
+                # 🔥 OPTIMIZACIÓN: Recopilar tokens FCM de usuarios NO conectados
+                # ✅ REEMPLAZAR TODA LA SECCIÓN DE FCM
+
+                tokens_para_fcm = []
+                usuarios_para_notificar = []
+
+                print(f"🔍 ════════════════════════════════════════")
+                print(f"🔍 VERIFICANDO USUARIOS CONECTADOS AL GRUPO {grupo_id}")
+                print(f"🔍 ════════════════════════════════════════")
+
                 for miembro_id in miembros_ids:
-                    if miembro_id != user.id:
-                        # 🔹 Notificación WebSocket (actualizar contador de no leídos)
+                    if miembro_id != user.id:  # Excluir al remitente
+                        # Notificación WebSocket (actualizar contador de no leídos)
                         await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
                         
-                        # 🔥 NUEVO: Verificar si el usuario está conectado al WebSocket
-                        esta_conectado = await grupo_notification_manager.is_user_connected(miembro_id)
+                        # ✅ VERIFICAR CONEXIÓN AL GRUPO ESPECÍFICO
+                        esta_conectado = manager.is_user_connected_to_group(grupo_id, miembro_id)
                         
-                        # Si NO está conectado → Enviar FCM
                         if not esta_conectado:
                             # Obtener tokens FCM del usuario
-                            tokens_fcm = db.query(FCMToken).filter(
+                            tokens_usuario = db.query(FCMToken).filter(
                                 FCMToken.usuario_id == miembro_id
                             ).all()
                             
-                            if tokens_fcm:
-                                # Obtener nombre del remitente
-                                nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
-                                
-                                # ✅ NUEVO: Usar el método correcto con todos los datos
-                                for fcm_token in tokens_fcm:
-                                    exito = await fcm_service.enviar_notificacion_mensaje(
-                                        token=fcm_token.token,
-                                        grupo_id=grupo_id,
-                                        grupo_nombre=grupo.nombre,  # ✅ Nombre del grupo
-                                        remitente_nombre=nombre_remitente,  # ✅ CRÍTICO para acumulación
-                                        mensaje=contenido,
-                                        timestamp=int(mensaje.fecha_creacion.timestamp() * 1000)  # ✅ Timestamp real
-                                    )
-                                    
-                                    if exito:
-                                        print(f"📲 FCM enviado exitosamente a usuario {miembro_id}")
-                                        print(f"   Grupo: {grupo.nombre}")
-                                        print(f"   Remitente: {nombre_remitente}")
-                                        print(f"   Mensaje: {contenido[:30]}...")
-                                    else:
-                                        print(f"⚠️ FCM falló para usuario {miembro_id} - Token posiblemente inválido")
+                            for token_obj in tokens_usuario:
+                                tokens_para_fcm.append(token_obj.token)
+                                usuarios_para_notificar.append(miembro_id)
+                            
+                            print(f"📱 Usuario {miembro_id} NO conectado - {len(tokens_usuario)} tokens agregados")
                         else:
-                            print(f"ℹ️ Usuario {miembro_id} está conectado, FCM no necesario")
+                            print(f"ℹ️ Usuario {miembro_id} está conectado al grupo, FCM no necesario")
+
+                print(f"🔍 ════════════════════════════════════════")
+
+                # 🚀 ENVÍO OPTIMIZADO: Una sola llamada multicast para TODOS los tokens
+                if tokens_para_fcm:
+                    nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+                    
+                    print(f"📤 ════════════════════════════════════════")
+                    print(f"📤 ENVIANDO FCM A USUARIOS NO CONECTADOS")
+                    print(f"📤 ════════════════════════════════════════")
+                    print(f"   Dispositivos: {len(tokens_para_fcm)}")
+                    print(f"   Usuarios únicos: {len(set(usuarios_para_notificar))}")
+                    print(f"   Grupo: {grupo.nombre}")
+                    print(f"   Remitente: {nombre_remitente}")
+                    print(f"   Mensaje: {contenido[:50]}...")
+                    
+                    resultado = await fcm_service.enviar_mensaje_a_grupo(
+                        tokens=tokens_para_fcm,
+                        grupo_id=grupo_id,
+                        grupo_nombre=grupo.nombre,
+                        remitente_nombre=nombre_remitente,
+                        mensaje=contenido,
+                        timestamp=int(mensaje.fecha_creacion.timestamp() * 1000)
+                    )
+                    
+                    print(f"✅ ════════════════════════════════════════")
+                    print(f"✅ RESULTADO FCM MULTICAST")
+                    print(f"✅ ════════════════════════════════════════")
+                    print(f"   Exitosos: {resultado['exitosos']}/{len(tokens_para_fcm)}")
+                    print(f"   Fallidos: {resultado['fallidos']}")
+                    
+                    # 🧹 Limpiar tokens inválidos
+                    if resultado['tokens_invalidos']:
+                        print(f"⚠️ {len(resultado['tokens_invalidos'])} tokens inválidos detectados")
+                        
+                        # ✅ CRÍTICO: Solo eliminar si fue error 'UnregisteredError'
+                        # NO eliminar si fue error del SDK o de red
+                        if resultado['exitosos'] > 0 or resultado['fallidos'] < len(tokens_para_fcm):
+                            # Hubo algunos exitosos, los inválidos SÍ son inválidos
+                            for token_invalido in resultado['tokens_invalidos']:
+                                db.query(FCMToken).filter(
+                                    FCMToken.token == token_invalido
+                                ).delete()
+                            db.commit()
+                            print(f"🗑️ Tokens inválidos eliminados de la BD")
+                        else:
+                            # ❌ TODOS fallaron, probablemente fue error del SDK
+                            print(f"⚠️ TODOS los envíos fallaron, NO se eliminan tokens (posible error del SDK)")
+                else:
+                    print(f"ℹ️ ════════════════════════════════════════")
+                    print(f"ℹ️ Todos los usuarios están conectados al grupo")
+                    print(f"ℹ️ No se requiere FCM")
+                    print(f"ℹ️ ════════════════════════════════════════")
 
                 # ✅ Broadcast del mensaje a todos los conectados al WebSocket del grupo
                 out = {
@@ -266,11 +310,11 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         "contenido": mensaje.contenido,
                         "tipo": mensaje.tipo,
                         "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                        "leido": True,      # Para el remitente siempre True
-                        "leido_por": 1      # Empezar en 1
+                        "leido": True,
+                        "leido_por": 1
                     }
                 }
-                await manager.broadcast(grupo_id, out)
+                await manager.broadcast(grupo_id, out, exclude_user_id=user.id)  # ✅ Excluir por user_id
 
             elif action == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
@@ -301,11 +345,12 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
             except asyncio.CancelledError:
                 print("🔹 Tarea de revalidación cancelada")
         
-        await manager.disconnect(grupo_id, websocket)
+        # ✅ CORRECCIÓN
+        if user:
+            await manager.disconnect(grupo_id, user.id)
         db.close()
         user_id = user.id if user else "desconocido"
         print(f"🔹 Usuario {user_id} desconectado del grupo {grupo_id}")
-
 
 @router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):

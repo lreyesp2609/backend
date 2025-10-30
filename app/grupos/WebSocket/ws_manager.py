@@ -7,38 +7,98 @@ from sqlalchemy.orm import Session
 
 class WebSocketManager:
     def __init__(self):
-        self.active_connections: Dict[int, Set[WebSocket]] = {}
+        # ✅ CAMBIO: Ahora mapea grupo_id -> {user_id -> WebSocket}
+        self.active_connections: Dict[int, Dict[int, WebSocket]] = {}
         self.lock = asyncio.Lock()
 
-    async def connect(self, grupo_id: int, websocket: WebSocket):
-        # ❌ NO LLAMAR websocket.accept() aquí, ya fue aceptado
+    async def connect(self, grupo_id: int, user_id: int, websocket: WebSocket):
+        """
+        ✅ ACTUALIZADO: Ahora recibe user_id para rastrear quién está conectado
+        """
         async with self.lock:
             if grupo_id not in self.active_connections:
-                self.active_connections[grupo_id] = set()
-            self.active_connections[grupo_id].add(websocket)
+                self.active_connections[grupo_id] = {}
+            self.active_connections[grupo_id][user_id] = websocket
+            print(f"✅ Usuario {user_id} conectado al grupo {grupo_id}")
+            print(f"   Total usuarios conectados al grupo: {len(self.active_connections[grupo_id])}")
 
-    async def disconnect(self, grupo_id: int, websocket: WebSocket):
+    async def disconnect(self, grupo_id: int, user_id: int):
+        """
+        ✅ ACTUALIZADO: Ahora recibe user_id en lugar de websocket
+        """
         async with self.lock:
-            conns = self.active_connections.get(grupo_id)
-            if conns and websocket in conns:
-                conns.remove(websocket)
-                if not conns:
+            if grupo_id in self.active_connections:
+                if user_id in self.active_connections[grupo_id]:
+                    del self.active_connections[grupo_id][user_id]
+                    print(f"🔌 Usuario {user_id} desconectado del grupo {grupo_id}")
+                
+                # Limpiar grupo si no hay usuarios
+                if not self.active_connections[grupo_id]:
                     del self.active_connections[grupo_id]
+                    print(f"🧹 Grupo {grupo_id} sin usuarios conectados, limpiado")
 
-    async def broadcast(self, grupo_id: int, message: dict, exclude: WebSocket | None = None):
-        conns = list(self.active_connections.get(grupo_id, []))
-        to_remove = []
-        for conn in conns:
-            if conn is exclude:
+    def is_user_connected_to_group(self, grupo_id: int, user_id: int) -> bool:
+        """
+        🆕 NUEVO: Verifica si un usuario específico está conectado a un grupo
+        
+        Returns:
+            bool: True si el usuario está conectado al WebSocket del grupo
+        """
+        return (
+            grupo_id in self.active_connections and 
+            user_id in self.active_connections[grupo_id]
+        )
+
+    async def broadcast(self, grupo_id: int, message: dict, exclude_user_id: int | None = None):
+        """
+        ✅ ACTUALIZADO: Ahora excluye por user_id en lugar de WebSocket
+        """
+        if grupo_id not in self.active_connections:
+            return
+        
+        disconnected_users = []
+        
+        # ✅ CORRECCIÓN: Copiar el diccionario correctamente
+        connections_snapshot = {}
+        async with self.lock:
+            grupo_connections = self.active_connections.get(grupo_id, {})
+            # Verificar que sea un dict, no un set
+            if isinstance(grupo_connections, dict):
+                connections_snapshot = dict(grupo_connections)
+            else:
+                print(f"⚠️ ADVERTENCIA: Conexiones del grupo {grupo_id} en formato antiguo (set), limpiando...")
+                self.active_connections[grupo_id] = {}
+                return
+        
+        for user_id, websocket in connections_snapshot.items():
+            if user_id == exclude_user_id:
                 continue
+            
             try:
-                await conn.send_text(json.dumps(message))
-            except Exception:
-                to_remove.append(conn)
-        if to_remove:
+                await websocket.send_text(json.dumps(message))
+            except Exception as e:
+                print(f"❌ Error enviando a usuario {user_id}: {e}")
+                disconnected_users.append(user_id)
+        
+        # Limpiar usuarios desconectados
+        if disconnected_users:
             async with self.lock:
-                for r in to_remove:
-                    self.active_connections.get(grupo_id, set()).discard(r)
+                for user_id in disconnected_users:
+                    if grupo_id in self.active_connections:
+                        self.active_connections[grupo_id].pop(user_id, None)
+    
+    def get_connected_users(self, grupo_id: int) -> list[int]:
+        """
+        🆕 NUEVO: Obtiene lista de user_ids conectados a un grupo
+        
+        Returns:
+            list[int]: Lista de IDs de usuarios conectados
+        """
+        if grupo_id in self.active_connections:
+            return list(self.active_connections[grupo_id].keys())
+        return []
+
+
 class UbicacionManager:
     def __init__(self):
         self.active_locations: dict[int, dict[int, WebSocket]] = {}
@@ -115,9 +175,11 @@ class GrupoNotificationManager:
             self.user_connections.pop(user_id, None)
             print(f"🔔 Usuario {user_id} desconectado de notificaciones globales")
     
-    # ✅ AGREGAR ESTE MÉTODO NUEVO
     async def is_user_connected(self, user_id: int) -> bool:
-        """Verifica si un usuario está conectado al WebSocket de notificaciones"""
+        """
+        ⚠️ DEPRECATED: Este método solo verifica notificaciones globales
+        Usar manager.is_user_connected_to_group() para verificar conexión al grupo
+        """
         async with self.lock:
             return user_id in self.user_connections
     

@@ -189,86 +189,91 @@ class FCMService:
         timestamp: Optional[int] = None
     ) -> Dict[str, any]:
         """
-        ✅ NUEVO: Envía notificación de mensaje a múltiples dispositivos
-        con datos completos para acumulación
-        
-        Args:
-            tokens: Lista de tokens FCM
-            grupo_id: ID del grupo
-            grupo_nombre: Nombre del grupo
-            remitente_nombre: Nombre de quien envió
-            mensaje: Contenido del mensaje
-            timestamp: Timestamp del mensaje
-        
-        Returns:
-            dict: {"exitosos": int, "fallidos": int, "tokens_invalidos": List[str]}
-        
-        Example:
-            resultado = await fcm_service.enviar_mensaje_a_grupo(
-                tokens=["token1", "token2"],
-                grupo_id=123,
-                grupo_nombre="Familia",
-                remitente_nombre="Juan",
-                mensaje="Hola a todos!",
-                timestamp=1730000000000
-            )
+        ✅ FALLBACK: Enviar uno por uno si send_multicast no está disponible
         """
         if not tokens:
             logger.warning("⚠️ No hay tokens para enviar")
             return {"exitosos": 0, "fallidos": 0, "tokens_invalidos": []}
         
         try:
-            # ✅ DATOS COMPLETOS
             notification_data = {
                 "type": "nuevo_mensaje",
                 "grupo_id": str(grupo_id),
                 "grupo_nombre": grupo_nombre,
-                "remitente_nombre": remitente_nombre,  # ✅ CRÍTICO
+                "remitente_nombre": remitente_nombre,
                 "cuerpo": mensaje,
-                "timestamp": str(timestamp or int(time.time() * 1000))
+                "timestamp": str(timestamp or int(time.time() * 1000)),
+                "titulo": f"💬 {grupo_nombre}"
             }
             
-            titulo = f"💬 {grupo_nombre}"
-            
-            message = messaging.MulticastMessage(
-                notification=messaging.Notification(
-                    title=titulo,
-                    body=f"{remitente_nombre}: {mensaje[:50]}..."
-                ),
-                data=notification_data,
-                tokens=tokens,
-                android=messaging.AndroidConfig(
-                    priority='high',
-                    notification=messaging.AndroidNotification(
-                        sound='default',
-                        channel_id='recuerdago_mensajes'
-                    )
+            # ✅ INTENTAR send_multicast primero
+            try:
+                message = messaging.MulticastMessage(
+                    data=notification_data,
+                    tokens=tokens,
+                    android=messaging.AndroidConfig(priority='high')
                 )
-            )
+                
+                response = messaging.send_multicast(message)
+                
+                tokens_invalidos = []
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success:
+                            tokens_invalidos.append(tokens[idx])
+                            logger.warning(f"⚠️ Token inválido: {tokens[idx][:20]}...")
+                
+                logger.info(f"📊 FCM grupo: {response.success_count} exitosos, {response.failure_count} fallidos")
+                
+                return {
+                    "exitosos": response.success_count,
+                    "fallidos": response.failure_count,
+                    "tokens_invalidos": tokens_invalidos
+                }
             
-            response = messaging.send_multicast(message)
-            
-            tokens_invalidos = []
-            if response.failure_count > 0:
-                for idx, resp in enumerate(response.responses):
-                    if not resp.success:
-                        tokens_invalidos.append(tokens[idx])
-                        logger.warning(f"⚠️ Token inválido: {tokens[idx][:20]}...")
-            
-            logger.info(f"📊 FCM grupo: {response.success_count} exitosos, {response.failure_count} fallidos")
-            
-            return {
-                "exitosos": response.success_count,
-                "fallidos": response.failure_count,
-                "tokens_invalidos": tokens_invalidos
-            }
-            
+            except AttributeError:
+                # ⚠️ FALLBACK: send_multicast no disponible, enviar uno por uno
+                logger.warning("⚠️ send_multicast no disponible, usando send() individual")
+                
+                exitosos = 0
+                fallidos = 0
+                tokens_invalidos = []
+                
+                for token in tokens:
+                    try:
+                        message = messaging.Message(
+                            data=notification_data,
+                            token=token,
+                            android=messaging.AndroidConfig(priority='high')
+                        )
+                        
+                        response = messaging.send(message)
+                        exitosos += 1
+                        logger.info(f"✅ FCM enviado a token: {token[:20]}...")
+                        
+                    except messaging.UnregisteredError:
+                        fallidos += 1
+                        tokens_invalidos.append(token)
+                        logger.warning(f"⚠️ Token no registrado: {token[:20]}...")
+                    
+                    except Exception as e:
+                        fallidos += 1
+                        logger.error(f"❌ Error enviando a token {token[:20]}...: {e}")
+                
+                logger.info(f"📊 FCM individual: {exitosos} exitosos, {fallidos} fallidos")
+                
+                return {
+                    "exitosos": exitosos,
+                    "fallidos": fallidos,
+                    "tokens_invalidos": tokens_invalidos
+                }
+                
         except Exception as e:
-            logger.error(f"❌ Error en envío multicast: {e}")
+            logger.error(f"❌ Error en envío: {e}")
             return {
                 "exitosos": 0,
                 "fallidos": len(tokens),
-                "tokens_invalidos": tokens
+                "tokens_invalidos": []  # ❌ NO marcar como inválidos si fue error del SDK
             }
     
     async def enviar_a_multiples(
