@@ -54,31 +54,54 @@ class WebSocketManager:
         ✅ ACTUALIZADO: Ahora excluye por user_id en lugar de WebSocket
         """
         if grupo_id not in self.active_connections:
+            print(f"⚠️ Grupo {grupo_id} no tiene conexiones activas")
             return
         
-        disconnected_users = []
-        
-        # ✅ CORRECCIÓN: Copiar el diccionario correctamente
+        # ✅ CRÍTICO: Copiar snapshot FUERA del lock para evitar bloqueos
         connections_snapshot = {}
         async with self.lock:
             grupo_connections = self.active_connections.get(grupo_id, {})
-            # Verificar que sea un dict, no un set
-            if isinstance(grupo_connections, dict):
+            
+            # 🔥 CORRECCIÓN DEL BUG: Migrar set a dict si es necesario
+            if isinstance(grupo_connections, set):
+                print(f"🔄 Migrando conexiones del grupo {grupo_id} de set a dict...")
+                new_dict = {}
+                for ws in grupo_connections:
+                    if hasattr(ws, 'usuario_id'):  # Si el websocket tiene usuario_id
+                        new_dict[ws.usuario_id] = ws
+                self.active_connections[grupo_id] = new_dict
+                connections_snapshot = dict(new_dict)
+            elif isinstance(grupo_connections, dict):
                 connections_snapshot = dict(grupo_connections)
             else:
-                print(f"⚠️ ADVERTENCIA: Conexiones del grupo {grupo_id} en formato antiguo (set), limpiando...")
-                self.active_connections[grupo_id] = {}
+                print(f"❌ ERROR: Conexiones del grupo {grupo_id} en formato desconocido: {type(grupo_connections)}")
                 return
+        
+        if not connections_snapshot:
+            print(f"⚠️ No hay usuarios conectados al grupo {grupo_id} para broadcast")
+            return
+        
+        print(f"📤 Broadcasting a {len(connections_snapshot)} usuarios en grupo {grupo_id}")
+        if exclude_user_id:
+            print(f"   (Excluyendo usuario {exclude_user_id})")
+        
+        disconnected_users = []
+        enviados_exitosos = 0
         
         for user_id, websocket in connections_snapshot.items():
             if user_id == exclude_user_id:
+                print(f"   ⏭️ Saltando usuario {user_id} (remitente)")
                 continue
             
             try:
                 await websocket.send_text(json.dumps(message))
+                enviados_exitosos += 1
+                print(f"   ✅ Mensaje enviado a usuario {user_id}")
             except Exception as e:
-                print(f"❌ Error enviando a usuario {user_id}: {e}")
+                print(f"   ❌ Error enviando a usuario {user_id}: {e}")
                 disconnected_users.append(user_id)
+        
+        print(f"📊 Broadcast completado: {enviados_exitosos} exitosos, {len(disconnected_users)} fallidos")
         
         # Limpiar usuarios desconectados
         if disconnected_users:
@@ -86,6 +109,7 @@ class WebSocketManager:
                 for user_id in disconnected_users:
                     if grupo_id in self.active_connections:
                         self.active_connections[grupo_id].pop(user_id, None)
+                        print(f"🧹 Usuario {user_id} removido por desconexión")
     
     def get_connected_users(self, grupo_id: int) -> list[int]:
         """
