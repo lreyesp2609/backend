@@ -194,3 +194,69 @@ def marcar_mensaje_leido(
     db.commit()
     
     return {"message": "Mensaje marcado como leído", "leido": True}
+
+@router.get("/{grupo_id}/integrantes")
+def integrantes_grupo(
+    grupo_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)  # ✅ Agregado paréntesis faltante
+):
+    """
+    Obtiene la lista de integrantes de un grupo
+    """
+    # Validar existencia del grupo
+    grupo = db.query(Grupo).filter(
+        Grupo.id == grupo_id, 
+        Grupo.is_deleted == False
+    ).first()
+    
+    if not grupo:
+        raise HTTPException(status_code=404, detail="Grupo no existe")
+    
+    # Validar membresía o permisos
+    miembro = db.query(MiembroGrupo).filter(
+        MiembroGrupo.usuario_id == current_user.id,
+        MiembroGrupo.grupo_id == grupo_id,
+        MiembroGrupo.activo == True
+    ).first()
+    
+    if not miembro and grupo.creado_por_id != current_user.id:
+        raise HTTPException(status_code=403, detail="No perteneces a este grupo")
+    
+    # Obtener integrantes del grupo
+    integrantes = db.query(
+        Usuario.id,
+        DatosPersonales.nombre,
+        DatosPersonales.apellido,
+        MiembroGrupo.rol,
+        MiembroGrupo.activo,
+        MiembroGrupo.fecha_union
+    ).join(
+        DatosPersonales, 
+        DatosPersonales.id == Usuario.datos_personales_id
+    ).join(
+        MiembroGrupo, 
+        MiembroGrupo.usuario_id == Usuario.id
+    ).filter(
+        MiembroGrupo.grupo_id == grupo_id
+    ).all()
+    
+    resultado = []
+    for usuario_id, nombre, apellido, rol, activo, fecha_union in integrantes:
+        resultado.append({
+            "usuario_id": usuario_id,
+            "nombre_completo": f"{nombre} {apellido}",
+            "nombre": nombre,
+            "apellido": apellido,
+            "rol": rol,
+            "activo": activo,
+            "fecha_union": fecha_union.isoformat() if fecha_union else None,
+            "es_creador": usuario_id == grupo.creado_por_id
+        })
+    
+    return {
+        "grupo_id": grupo_id,
+        "grupo_nombre": grupo.nombre,
+        "total_integrantes": len(resultado),
+        "integrantes": resultado
+    }
