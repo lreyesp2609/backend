@@ -30,21 +30,6 @@ class MiembroGrupo(Base):
     usuario = relationship("Usuario", backref="grupos_miembro")
     grupo = relationship("Grupo", back_populates="miembros")
 
-class InvitacionGrupo(Base):
-    __tablename__ = "invitaciones_grupo"
-    id = Column(Integer, primary_key=True, index=True)
-    grupo_id = Column(Integer, ForeignKey("grupos.id"), nullable=False)
-    codigo = Column(String(12), unique=True, nullable=False)
-    creado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
-    usado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
-    fecha_creacion = Column(DateTime, default=datetime.utcnow)
-    fecha_uso = Column(DateTime, nullable=True)
-    activo = Column(Boolean, default=True)
-
-    grupo = relationship("Grupo")
-    creado_por = relationship("Usuario", foreign_keys=[creado_por_id])
-    usado_por = relationship("Usuario", foreign_keys=[usado_por_id])
-
 class Mensaje(Base):
     __tablename__ = "mensajes"
     id = Column(Integer, primary_key=True, index=True)

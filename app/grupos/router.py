@@ -41,6 +41,7 @@ def listar_grupos(
 
     grupos_miembro = db.query(Grupo).join(MiembroGrupo).filter(
         MiembroGrupo.usuario_id == current_user.id,
+        MiembroGrupo.activo == True,
         Grupo.is_deleted == False
     )
 
@@ -61,14 +62,25 @@ def unirse_a_grupo(
     if grupo.creado_por_id == current_user.id:
         raise HTTPException(status_code=400, detail="Eres el creador de este grupo, ya perteneces a él")
 
+    # ✅ Buscar si el usuario ya fue miembro (activo o inactivo)
     miembro_existente = db.query(MiembroGrupo).filter_by(
         usuario_id=current_user.id,
         grupo_id=grupo.id
     ).first()
 
     if miembro_existente:
-        raise HTTPException(status_code=400, detail="Ya perteneces a este grupo")
+        # ✅ Si ya existe pero está inactivo, reactivarlo
+        if not miembro_existente.activo:
+            miembro_existente.activo = True
+            miembro_existente.fecha_union = datetime.utcnow()  # Actualizar fecha de reingreso
+            db.commit()
+            db.refresh(grupo)
+            return grupo
+        else:
+            # Ya está activo
+            raise HTTPException(status_code=400, detail="Ya perteneces a este grupo")
 
+    # ✅ Si no existe, crear nuevo miembro
     nuevo_miembro = MiembroGrupo(
         usuario_id=current_user.id,
         grupo_id=grupo.id,
@@ -260,3 +272,12 @@ def integrantes_grupo(
         "total_integrantes": len(resultado),
         "integrantes": resultado
     }
+
+@router.post("/{grupo_id}/salir")
+def salir_grupo(
+    grupo_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    from .crud import salir_de_grupo
+    return salir_de_grupo(db, grupo_id, current_user.id)

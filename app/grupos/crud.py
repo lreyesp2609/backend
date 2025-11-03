@@ -46,3 +46,34 @@ def create_grupo(db: Session, grupo_data, user_id: int):
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error al crear grupo: {str(e)}")
+
+def salir_de_grupo(db: Session, grupo_id: int, user_id: int):
+    grupo = db.query(Grupo).filter(
+        Grupo.id == grupo_id,
+        Grupo.is_deleted == False
+    ).first()
+
+    if not grupo:
+        raise HTTPException(status_code=404, detail="El grupo no existe")
+
+    # El creador no puede salir
+    if grupo.creado_por_id == user_id:
+        raise HTTPException(status_code=400, detail="El creador no puede abandonar su propio grupo")
+
+    miembro = db.query(MiembroGrupo).filter_by(
+        usuario_id=user_id,
+        grupo_id=grupo_id
+    ).first()
+
+    if not miembro:
+        raise HTTPException(status_code=400, detail="No perteneces a este grupo")
+
+    if not miembro.activo:
+        raise HTTPException(status_code=400, detail="Ya no eres miembro de este grupo")
+
+    # 🔹 Solo esta parte cambia: no se borra, se desactiva
+    miembro.activo = False
+    db.commit()
+
+    # 🔹 Mensaje más natural y limpio
+    return {"message": "Has abandonado el grupo correctamente"}
