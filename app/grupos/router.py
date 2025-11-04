@@ -281,3 +281,33 @@ def salir_grupo(
 ):
     from .crud import salir_de_grupo
     return salir_de_grupo(db, grupo_id, current_user.id)
+
+@router.delete("/eliminar/{grupo_id}")
+def eliminar_grupo(
+    grupo_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    grupo = db.query(Grupo).filter(
+        Grupo.id == grupo_id,
+        Grupo.is_deleted == False
+    ).first()
+
+    if not grupo:
+        raise HTTPException(status_code=404, detail="Grupo no encontrado")
+
+    # Solo el creador puede eliminarlo
+    if grupo.creado_por_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Solo el creador puede eliminar el grupo")
+
+    # Marcar grupo como eliminado
+    grupo.is_deleted = True
+
+    # Desactivar todos los miembros del grupo
+    db.query(MiembroGrupo).filter(
+        MiembroGrupo.grupo_id == grupo_id
+    ).update({"activo": False})
+
+    db.commit()
+
+    return {"message": f"Grupo '{grupo.nombre}' eliminado correctamente"}
