@@ -71,6 +71,19 @@ async def enviar_fcm_en_background(
         print(f"❌ Error en FCM background: {e}")
         import traceback
         traceback.print_exc()
+        # ✅ Hacer rollback si hay error
+        try:
+            db_session.rollback()
+        except:
+            pass
+    
+    finally:
+        # ✅ CRÍTICO: Siempre cerrar la sesión al terminar
+        try:
+            db_session.close()
+            print("🔒 Sesión DB de FCM background cerrada")
+        except Exception as e:
+            print(f"⚠️ Error cerrando sesión FCM: {e}")
 
 @router.websocket("/ws/grupos/{grupo_id}")
 async def websocket_grupo(websocket: WebSocket, grupo_id: int):
@@ -364,23 +377,33 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                                 print(f"📱 Usuario {miembro_id}: {mensajes_no_leidos} no leídos")
 
                     # 7️⃣ FCM en background
+                    fcm_data = None
                     if tokens_para_fcm:
-                        nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
-                        
-                        asyncio.create_task(enviar_fcm_en_background(
-                            tokens=tokens_para_fcm,
-                            grupo_id=grupo_id,
-                            grupo_nombre=grupo.nombre,
-                            remitente_nombre=nombre_remitente,
-                            mensaje=contenido,
-                            timestamp=int(mensaje.fecha_creacion.timestamp() * 1000),
-                            db_session=db
-                        ))
-                        print(f"🚀 FCM programado para {len(tokens_para_fcm)} dispositivos")
-                
+                        fcm_data = {
+                            'tokens': tokens_para_fcm,
+                            'grupo_id': grupo_id,
+                            'grupo_nombre': grupo.nombre,
+                            'remitente_nombre': f"{user.datos_personales.nombre} {user.datos_personales.apellido}",
+                            'mensaje': contenido,
+                            'timestamp': int(mensaje.fecha_creacion.timestamp() * 1000)
+                        }
+
                 finally:
                     db.close()  # ← CERRAR DB después de procesar mensaje
                     print("🔒 Sesión DB cerrada después de procesar mensaje")
+
+                # 8️⃣ Lanzar FCM en background (DESPUÉS de cerrar DB)
+                if fcm_data:
+                    asyncio.create_task(enviar_fcm_en_background(
+                        tokens=fcm_data['tokens'],
+                        grupo_id=fcm_data['grupo_id'],
+                        grupo_nombre=fcm_data['grupo_nombre'],
+                        remitente_nombre=fcm_data['remitente_nombre'],
+                        mensaje=fcm_data['mensaje'],
+                        timestamp=fcm_data['timestamp'],
+                        db_session=SessionLocal()  # ✅ Nueva sesión independiente
+                    ))
+                    print(f"🚀 FCM programado para {len(fcm_data['tokens'])} dispositivos")
 
     except WebSocketDisconnect:
         print(f"🔹 WebSocket desconectado para usuario {user.id if user else 'desconocido'}")
