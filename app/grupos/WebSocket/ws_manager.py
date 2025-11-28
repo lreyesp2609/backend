@@ -207,13 +207,23 @@ class GrupoNotificationManager:
         async with self.lock:
             return user_id in self.user_connections
     
-    async def notify_unread_count_changed(self, user_id: int, db: Session):
+    async def notify_unread_count_changed(self, user_id: int, db: Session = None):
         """
-        Notifica a un usuario específico sobre cambios en mensajes no leídos
+        Notifica a un usuario específico sobre cambios en mensajes no leídos.
+        
+        ⚠️ IMPORTANTE: Si no se proporciona 'db', se crea una sesión temporal
+        que se cierra automáticamente. Esto es CRÍTICO para WebSockets.
         """
         websocket = self.user_connections.get(user_id)
         if not websocket:
             return
+        
+        # 🔥 CLAVE: Crear sesión temporal si no se proporciona
+        should_close_db = False
+        if db is None:
+            from ...database.database import SessionLocal
+            db = SessionLocal()
+            should_close_db = True
         
         try:
             # Calcular mensajes no leídos por grupo
@@ -267,6 +277,11 @@ class GrupoNotificationManager:
         except Exception as e:
             print(f"❌ Error al notificar usuario {user_id}: {e}")
             await self.disconnect_user(user_id)
+        
+        finally:
+            # 🔥 CRÍTICO: Cerrar sesión si la creamos nosotros
+            if should_close_db:
+                db.close()
 
 # Instancia global
 grupo_notification_manager = GrupoNotificationManager()

@@ -77,82 +77,69 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
     await websocket.accept()
     print("🔹 WebSocket aceptado, iniciando validaciones...")
     
-    db = SessionLocal()
     user = None
     current_token = None
     revalidation_task = None
     
     try:
-        # Extraer token inicial
-        auth = websocket.headers.get("authorization")
-        if auth and auth.startswith("Bearer "):
-            current_token = auth.split(" ", 1)[1]
-        else:
-            current_token = websocket.query_params.get("token")
-        
-        if not current_token:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Token no proporcionado"
-            }))
-            await websocket.close(code=1008)
-            return
-        
-        # Autenticar usuario
+        # ═══════════════════════════════════════════════════════
+        # 1️⃣ AUTENTICACIÓN (abre DB, valida, cierra)
+        # ═══════════════════════════════════════════════════════
+        db = SessionLocal()
         try:
+            # Extraer token inicial
+            auth = websocket.headers.get("authorization")
+            if auth and auth.startswith("Bearer "):
+                current_token = auth.split(" ", 1)[1]
+            else:
+                current_token = websocket.query_params.get("token")
+            
+            if not current_token:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Token no proporcionado"
+                }))
+                await websocket.close(code=1008)
+                return
+            
+            # Autenticar usuario
             user = await get_current_user_ws(websocket, db)
             print(f"🔹 Usuario conectado: ID={user.id}, activo={user.activo}")
-        except Exception as e:
-            print(f"❌ Error al autenticar WebSocket: {e}")
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": f"Autenticación fallida: {str(e)}"
-            }))
-            await websocket.close(code=1008)
-            return
+            
+            # Validar grupo
+            grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
+            if not grupo:
+                print(f"❌ Grupo {grupo_id} no encontrado")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Grupo no encontrado"
+                }))
+                await websocket.close(code=1008)
+                return
+            print(f"🔹 Grupo encontrado: ID={grupo.id}, creado_por_id={grupo.creado_por_id}")
 
-        # Validar grupo
-        grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
-        if not grupo:
-            print(f"❌ Grupo {grupo_id} no encontrado")
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Grupo no encontrado"
-            }))
-            await websocket.close(code=1008)
-            return
-        print(f"🔹 Grupo encontrado: ID={grupo.id}, creado_por_id={grupo.creado_por_id}")
+            # Verificar permisos
+            miembro = db.query(MiembroGrupo).filter_by(
+                usuario_id=user.id, 
+                grupo_id=grupo_id, 
+                activo=True
+            ).first()
+            
+            es_creador = grupo.creado_por_id == user.id
+            print(f"🔹 Miembro encontrado: {miembro}, Es creador: {es_creador}")
+            
+            if not miembro and not es_creador:
+                print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "No tienes acceso a este grupo"
+                }))
+                await websocket.close(code=1008)
+                return
 
-        # Verificar permisos
-        miembro = db.query(MiembroGrupo).filter_by(
-            usuario_id=user.id, 
-            grupo_id=grupo_id, 
-            activo=True
-        ).first()
-        
-        es_creador = grupo.creado_por_id == user.id
-        print(f"🔹 Miembro encontrado: {miembro}, Es creador: {es_creador}")
-        
-        if not miembro and not es_creador:
-            print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "No tienes acceso a este grupo"
-            }))
-            await websocket.close(code=1008)
-            return
+            websocket.usuario_id = user.id
 
-        # ✅ AGREGAR AQUÍ:
-        websocket.usuario_id = user.id
-
-        # Agregar a conexiones activas
-        await manager.connect(grupo_id, user.id, websocket)
-
-        print(f"✅ Usuario {user.id} conectado al grupo {grupo_id}")
-
-        # 🆕🆕🆕 MARCAR TODOS LOS MENSAJES NO LEÍDOS COMO LEÍDOS AL CONECTAR
-        try:
-            # Obtener mensajes no leídos del usuario en este grupo
+            # Marcar mensajes como leídos al conectar
             mensajes_no_leidos = db.query(Mensaje).outerjoin(
                 LecturaMensaje,
                 and_(
@@ -161,17 +148,12 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 )
             ).filter(
                 Mensaje.grupo_id == grupo_id,
-                Mensaje.remitente_id != user.id,  # No sus propios mensajes
-                LecturaMensaje.id == None  # Sin registro de lectura
+                Mensaje.remitente_id != user.id,
+                LecturaMensaje.id == None
             ).all()
             
             if mensajes_no_leidos:
-                print(f"📖 ════════════════════════════════════════")
                 print(f"📖 Marcando {len(mensajes_no_leidos)} mensajes como leídos")
-                print(f"📖 Usuario: {user.id} | Grupo: {grupo_id}")
-                print(f"📖 ════════════════════════════════════════")
-                
-                # Crear registros de lectura masivos
                 for mensaje in mensajes_no_leidos:
                     lectura = LecturaMensaje(
                         mensaje_id=mensaje.id,
@@ -179,33 +161,25 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         leido_at=datetime.now(timezone.utc)
                     )
                     db.add(lectura)
-                
                 db.commit()
                 print(f"✅ {len(mensajes_no_leidos)} mensajes marcados como leídos")
-                
-                # ✅✅✅ ESTO ES LO NUEVO - NOTIFICAR CONTADOR ACTUALIZADO ✅✅✅
-                print(f"🔔 ════════════════════════════════════════")
-                print(f"🔔 NOTIFICANDO ACTUALIZACIÓN DE CONTADOR A 0")
-                print(f"🔔 Usuario: {user.id}")
-                print(f"🔔 ════════════════════════════════════════")
-                
-                await grupo_notification_manager.notify_unread_count_changed(user.id, db)
-                
-                print(f"✅ Notificación de contador enviada exitosamente")
-                
-            else:
-                print(f"ℹ️ No hay mensajes pendientes de lectura para usuario {user.id}")
-                # ✅ Igual notificar para asegurar que el contador esté en 0
-                await grupo_notification_manager.notify_unread_count_changed(user.id, db)
-                print(f"✅ Contador confirmado en 0")
-                
-        except Exception as e:
-            print(f"❌ Error marcando mensajes como leídos: {e}")
-            import traceback
-            traceback.print_exc()
-            db.rollback()
+            
+            # Notificar contador actualizado
+            await grupo_notification_manager.notify_unread_count_changed(user.id, db)
+            
+        finally:
+            db.close()  # ← CERRAR DB después de autenticación
+            print("🔒 Sesión DB cerrada después de autenticación")
+        
+        # ═══════════════════════════════════════════════════════
+        # 2️⃣ CONECTAR AL MANAGER (sin DB)
+        # ═══════════════════════════════════════════════════════
+        await manager.connect(grupo_id, user.id, websocket)
+        print(f"✅ Usuario {user.id} conectado al grupo {grupo_id}")
 
-        # 🆕 Tarea de revalidación (tu código existente)
+        # ═══════════════════════════════════════════════════════
+        # 3️⃣ TAREA DE REVALIDACIÓN (sin DB)
+        # ═══════════════════════════════════════════════════════
         async def revalidate_token():
             """Revalida el token cada 60 segundos"""
             while True:
@@ -253,13 +227,23 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
         
         revalidation_task = asyncio.create_task(revalidate_token())
 
+        # Obtener nombre del grupo (necesitamos abrir DB brevemente)
+        db = SessionLocal()
+        try:
+            grupo = db.query(Grupo).filter(Grupo.id == grupo_id).first()
+            grupo_nombre = grupo.nombre if grupo else "Grupo"
+        finally:
+            db.close()
+
         await websocket.send_text(json.dumps({
             "type": "system",
-            "message": f"Conectado al grupo {grupo.nombre}",
+            "message": f"Conectado al grupo {grupo_nombre}",
             "grupo_id": grupo_id
         }))
 
-        # 🔄 Bucle de recepción de mensajes
+        # ═══════════════════════════════════════════════════════
+        # 4️⃣ LOOP PRINCIPAL (sin DB abierta permanentemente)
+        # ═══════════════════════════════════════════════════════
         while True:
             raw = await websocket.receive_text()
             payload = json.loads(raw)
@@ -293,114 +277,113 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 if not contenido:
                     continue
 
-                # 1️⃣ Guardar mensaje en BD
-                mensaje = Mensaje(
-                    remitente_id=user.id,
-                    grupo_id=grupo_id,
-                    contenido=contenido,
-                    tipo=tipo,
-                    fecha_creacion=datetime.now(timezone.utc)
-                )
-                db.add(mensaje)
-                db.commit()
-                db.refresh(mensaje)
-
-                # 2️⃣ Marcar automáticamente como leído para el remitente
-                lectura = LecturaMensaje(
-                    mensaje_id=mensaje.id,
-                    usuario_id=user.id,
-                    leido_at=datetime.now(timezone.utc)
-                )
-                db.add(lectura)
-                db.commit()
-                print(f"✅ Mensaje {mensaje.id} guardado y marcado como leído por usuario {user.id}")
-
-                # 3️⃣ Obtener todos los miembros del grupo
-                miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
-                miembros_ids = [m.usuario_id for m in miembros]
-                if grupo.creado_por_id not in miembros_ids:
-                    miembros_ids.append(grupo.creado_por_id)
-
-                # 4️⃣ Preparar mensaje para WebSocket
-                out = {
-                    "type": "mensaje",
-                    "data": {
-                        "id": mensaje.id,
-                        "remitente_id": mensaje.remitente_id,
-                        "grupo_id": mensaje.grupo_id,
-                        "contenido": mensaje.contenido,
-                        "tipo": mensaje.tipo,
-                        "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                        "leido": True,
-                        "leido_por": 1
-                    }
-                }
-
-                # 5️⃣ ENVIAR INMEDIATAMENTE por WebSocket
-                print(f"📤 Enviando mensaje por WebSocket al grupo {grupo_id}")
-                await manager.broadcast(grupo_id, out)
-                print(f"✅ Mensaje enviado por WebSocket instantáneamente")
-
-                # 6️⃣ Recopilar tokens FCM SOLO para usuarios con mensajes NO LEÍDOS
-                tokens_para_fcm = []
-                
-                for miembro_id in miembros_ids:
-                    if miembro_id != user.id:  # Excluir al remitente
-                        # ✅✅✅ ACTUALIZAR CONTADOR PARA CADA MIEMBRO ✅✅✅
-                        print(f"🔔 Actualizando contador para usuario {miembro_id}")
-                        await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
-                        
-                        # Verificar si está conectado al grupo
-                        esta_conectado = manager.is_user_connected_to_group(grupo_id, miembro_id)
-                        
-                        if esta_conectado:
-                            print(f"ℹ️ Usuario {miembro_id} está conectado, no se envía FCM")
-                            continue
-                        
-                        # Verificar si tiene mensajes NO LEÍDOS en este grupo
-                        mensajes_no_leidos = db.query(func.count(Mensaje.id)).outerjoin(
-                            LecturaMensaje, 
-                            and_(
-                                LecturaMensaje.mensaje_id == Mensaje.id,
-                                LecturaMensaje.usuario_id == miembro_id
-                            )
-                        ).filter(
-                            Mensaje.grupo_id == grupo_id,
-                            Mensaje.remitente_id != miembro_id,
-                            LecturaMensaje.id == None
-                        ).scalar() or 0
-                        
-                        # Solo enviar FCM si tiene mensajes no leídos
-                        if mensajes_no_leidos > 0:
-                            tokens_usuario = db.query(FCMToken).filter(
-                                FCMToken.usuario_id == miembro_id
-                            ).all()
-                            
-                            tokens_para_fcm.extend([t.token for t in tokens_usuario])
-                            print(f"📱 Usuario {miembro_id} NO conectado - {mensajes_no_leidos} no leídos - {len(tokens_usuario)} tokens")
-                        else:
-                            print(f"✅ Usuario {miembro_id} tiene todos los mensajes leídos, no se envía FCM")
-
-                # 7️⃣ FCM EN BACKGROUND (NO BLOQUEA)
-                if tokens_para_fcm:
-                    nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
-                    
-                    asyncio.create_task(enviar_fcm_en_background(
-                        tokens=tokens_para_fcm,
+                # 🔥 Abrir DB SOLO para esta operación
+                db = SessionLocal()
+                try:
+                    # 1️⃣ Guardar mensaje en BD
+                    mensaje = Mensaje(
+                        remitente_id=user.id,
                         grupo_id=grupo_id,
-                        grupo_nombre=grupo.nombre,
-                        remitente_nombre=nombre_remitente,
-                        mensaje=contenido,
-                        timestamp=int(mensaje.fecha_creacion.timestamp() * 1000),
-                        db_session=db
-                    ))
+                        contenido=contenido,
+                        tipo=tipo,
+                        fecha_creacion=datetime.now(timezone.utc)
+                    )
+                    db.add(mensaje)
+                    db.commit()
+                    db.refresh(mensaje)
+
+                    # 2️⃣ Marcar como leído para el remitente
+                    lectura = LecturaMensaje(
+                        mensaje_id=mensaje.id,
+                        usuario_id=user.id,
+                        leido_at=datetime.now(timezone.utc)
+                    )
+                    db.add(lectura)
+                    db.commit()
+                    print(f"✅ Mensaje {mensaje.id} guardado")
+
+                    # 3️⃣ Obtener miembros del grupo
+                    grupo = db.query(Grupo).filter(Grupo.id == grupo_id).first()
+                    miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
+                    miembros_ids = [m.usuario_id for m in miembros]
+                    if grupo.creado_por_id not in miembros_ids:
+                        miembros_ids.append(grupo.creado_por_id)
+
+                    # 4️⃣ Preparar mensaje para WebSocket
+                    out = {
+                        "type": "mensaje",
+                        "data": {
+                            "id": mensaje.id,
+                            "remitente_id": mensaje.remitente_id,
+                            "grupo_id": mensaje.grupo_id,
+                            "contenido": mensaje.contenido,
+                            "tipo": mensaje.tipo,
+                            "fecha_creacion": mensaje.fecha_creacion.isoformat(),
+                            "leido": True,
+                            "leido_por": 1
+                        }
+                    }
+
+                    # 5️⃣ ENVIAR por WebSocket
+                    print(f"📤 Enviando mensaje por WebSocket")
+                    await manager.broadcast(grupo_id, out)
+
+                    # 6️⃣ Actualizar contadores y preparar FCM
+                    tokens_para_fcm = []
                     
-                    print(f"🚀 FCM programado en background para {len(tokens_para_fcm)} dispositivos")
-                else:
-                    print(f"ℹ️ Todos los usuarios conectados o sin mensajes pendientes, no se requiere FCM")
+                    for miembro_id in miembros_ids:
+                        if miembro_id != user.id:
+                            # Actualizar contador
+                            await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
+                            
+                            # Verificar si está conectado
+                            esta_conectado = manager.is_user_connected_to_group(grupo_id, miembro_id)
+                            
+                            if esta_conectado:
+                                print(f"ℹ️ Usuario {miembro_id} conectado, no FCM")
+                                continue
+                            
+                            # Contar no leídos
+                            mensajes_no_leidos = db.query(func.count(Mensaje.id)).outerjoin(
+                                LecturaMensaje, 
+                                and_(
+                                    LecturaMensaje.mensaje_id == Mensaje.id,
+                                    LecturaMensaje.usuario_id == miembro_id
+                                )
+                            ).filter(
+                                Mensaje.grupo_id == grupo_id,
+                                Mensaje.remitente_id != miembro_id,
+                                LecturaMensaje.id == None
+                            ).scalar() or 0
+                            
+                            if mensajes_no_leidos > 0:
+                                tokens_usuario = db.query(FCMToken).filter(
+                                    FCMToken.usuario_id == miembro_id
+                                ).all()
+                                tokens_para_fcm.extend([t.token for t in tokens_usuario])
+                                print(f"📱 Usuario {miembro_id}: {mensajes_no_leidos} no leídos")
+
+                    # 7️⃣ FCM en background
+                    if tokens_para_fcm:
+                        nombre_remitente = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+                        
+                        asyncio.create_task(enviar_fcm_en_background(
+                            tokens=tokens_para_fcm,
+                            grupo_id=grupo_id,
+                            grupo_nombre=grupo.nombre,
+                            remitente_nombre=nombre_remitente,
+                            mensaje=contenido,
+                            timestamp=int(mensaje.fecha_creacion.timestamp() * 1000),
+                            db_session=db
+                        ))
+                        print(f"🚀 FCM programado para {len(tokens_para_fcm)} dispositivos")
+                
+                finally:
+                    db.close()  # ← CERRAR DB después de procesar mensaje
+                    print("🔒 Sesión DB cerrada después de procesar mensaje")
 
     except WebSocketDisconnect:
-        print(f"🔹 WebSocket desconectado normalmente para usuario {user.id if user else 'desconocido'}")
+        print(f"🔹 WebSocket desconectado para usuario {user.id if user else 'desconocido'}")
     except Exception as e:
         print(f"❌ Excepción en WebSocket: {e}")
         traceback.print_exc()
@@ -420,85 +403,86 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 print("🔹 Tarea de revalidación cancelada")
         
         if user:
-            # ✅✅✅ ACTUALIZAR CONTADOR AL DESCONECTAR ✅✅✅
             await manager.disconnect(grupo_id, user.id)
             
+            # Actualizar contador final (abre/cierra DB)
             try:
-                print(f"🔔 Actualizando contador final para usuario {user.id}")
-                await grupo_notification_manager.notify_unread_count_changed(user.id, db)
-                print(f"✅ Contador final actualizado")
+                print(f"🔔 Actualizando contador final")
+                await grupo_notification_manager.notify_unread_count_changed(user.id)  # Sin db
             except Exception as e:
-                print(f"⚠️ Error actualizando contador al desconectar: {e}")
+                print(f"⚠️ Error actualizando contador: {e}")
         
-        db.close()
-        user_id = user.id if user else "desconocido"
-        print(f"🔹 Usuario {user_id} desconectado del grupo {grupo_id}")
+        print(f"🔹 Usuario {user.id if user else 'desconocido'} desconectado del grupo {grupo_id}")
 
 @router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
     await websocket.accept()
     print("📍 WebSocket de ubicaciones aceptado")
     
-    db = SessionLocal()
     user = None
     current_token = None
     heartbeat_task = None
-    revalidation_task = None  # 🆕 Tarea de revalidación
+    revalidation_task = None
     
     try:
-        # Autenticar
-        auth = websocket.headers.get("authorization")
-        if auth and auth.startswith("Bearer "):
-            current_token = auth.split(" ", 1)[1]
-        else:
-            current_token = websocket.query_params.get("token")
-        
-        if not current_token:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Token no proporcionado"
-            }))
-            await websocket.close(code=1008)
-            return
-        
-        # Autenticar usuario
+        # ═══════════════════════════════════════════════════════
+        # 1️⃣ AUTENTICACIÓN (abre DB, valida, cierra)
+        # ═══════════════════════════════════════════════════════
+        db = SessionLocal()
         try:
+            # Extraer token
+            auth = websocket.headers.get("authorization")
+            if auth and auth.startswith("Bearer "):
+                current_token = auth.split(" ", 1)[1]
+            else:
+                current_token = websocket.query_params.get("token")
+            
+            if not current_token:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Token no proporcionado"
+                }))
+                await websocket.close(code=1008)
+                return
+            
+            # Autenticar usuario
             user = await get_current_user_ws(websocket, db)
             print(f"📍 Usuario conectado a ubicaciones: ID={user.id}")
-        except Exception as e:
-            print(f"❌ Error al autenticar WebSocket ubicaciones: {e}")
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": f"Autenticación fallida: {str(e)}"
-            }))
-            await websocket.close(code=1008)
-            return
+            
+            # Validar grupo y permisos
+            grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
+            if not grupo:
+                print(f"❌ Grupo {grupo_id} no encontrado")
+                await websocket.close(code=1008)
+                return
+            
+            miembro = db.query(MiembroGrupo).filter_by(
+                usuario_id=user.id, 
+                grupo_id=grupo_id, 
+                activo=True
+            ).first()
+            
+            if not miembro and grupo.creado_por_id != user.id:
+                print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
+                await websocket.close(code=1008)
+                return
+            
+            # Obtener nombre del usuario y grupo
+            nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+            grupo_nombre = grupo.nombre
+            
+        finally:
+            db.close()  # ← CERRAR DB después de autenticación
+            print("🔒 Sesión DB cerrada después de autenticación (ubicaciones)")
         
-        # Validar grupo y permisos
-        grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
-        if not grupo:
-            print(f"❌ Grupo {grupo_id} no encontrado")
-            await websocket.close(code=1008)
-            return
-        
-        miembro = db.query(MiembroGrupo).filter_by(
-            usuario_id=user.id, 
-            grupo_id=grupo_id, 
-            activo=True
-        ).first()
-        
-        if not miembro and grupo.creado_por_id != user.id:
-            print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
-            await websocket.close(code=1008)
-            return
-        
-        # Conectar
+        # ═══════════════════════════════════════════════════════
+        # 2️⃣ CONECTAR AL MANAGER (sin DB)
+        # ═══════════════════════════════════════════════════════
         await ubicacion_manager.connect_ubicacion(grupo_id, user.id, websocket)
         
-        # Obtener nombre del usuario
-        nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
-        
-        # 🆕 Tarea de revalidación de token
+        # ═══════════════════════════════════════════════════════
+        # 3️⃣ TAREA DE REVALIDACIÓN (sin DB)
+        # ═══════════════════════════════════════════════════════
         async def revalidate_token():
             """Revalida el token cada 60 segundos"""
             while True:
@@ -546,7 +530,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         
         revalidation_task = asyncio.create_task(revalidate_token())
         
-        # Enviar ubicaciones actuales del grupo
+        # Enviar ubicaciones actuales del grupo (sin DB)
         ubicaciones_actuales = ubicacion_manager.get_ubicaciones_grupo(grupo_id)
         await websocket.send_text(json.dumps({
             "type": "ubicaciones_iniciales",
@@ -565,11 +549,13 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         
         await websocket.send_text(json.dumps({
             "type": "system",
-            "message": f"Conectado a ubicaciones del grupo {grupo.nombre}",
+            "message": f"Conectado a ubicaciones del grupo {grupo_nombre}",
             "grupo_id": grupo_id
         }))
         
-        # Heartbeat cada 30s
+        # ═══════════════════════════════════════════════════════
+        # 4️⃣ HEARTBEAT (sin DB)
+        # ═══════════════════════════════════════════════════════
         async def heartbeat():
             while True:
                 await asyncio.sleep(30)
@@ -580,12 +566,14 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         
         heartbeat_task = asyncio.create_task(heartbeat())
         
-        # Bucle de recepción
+        # ═══════════════════════════════════════════════════════
+        # 5️⃣ LOOP PRINCIPAL (sin DB abierta permanentemente)
+        # ═══════════════════════════════════════════════════════
         while True:
             raw = await websocket.receive_text()
             payload = json.loads(raw)
             
-            # 🆕 Refresh token
+            # Refresh token (sin DB)
             if payload.get("type") == "refresh_token":
                 new_token = payload.get("token")
                 if new_token:
@@ -604,6 +592,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                         }))
                 continue
             
+            # Actualizar ubicación (sin DB, solo broadcast en memoria)
             if payload.get("type") == "ubicacion":
                 lat = payload.get("lat")
                 lon = payload.get("lon")
@@ -615,6 +604,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                         "lon": lon,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }
+                    # Broadcast solo usa memoria, no DB
                     await ubicacion_manager.broadcast_ubicacion(grupo_id, user.id, data)
             
             elif payload.get("type") == "pong":
@@ -633,7 +623,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         except:
             pass
     finally:
-        # 🆕 Cancelar tareas
+        # Cancelar tareas (sin DB)
         if heartbeat_task:
             heartbeat_task.cancel()
             try:
@@ -648,12 +638,11 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             except asyncio.CancelledError:
                 print("📍 Tarea de revalidación cancelada")
         
+        # Desconectar (sin DB)
         if user:
             await ubicacion_manager.disconnect_ubicacion(grupo_id, user.id)
         
-        db.close()
-        user_id = user.id if user else "desconocido"
-        print(f"📍 Usuario {user_id} desconectado del grupo {grupo_id} (ubicaciones)")
+        print(f"📍 Usuario {user.id if user else 'desconocido'} desconectado del grupo {grupo_id} (ubicaciones)")
 
 @router.websocket("/ws/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
@@ -664,47 +653,53 @@ async def websocket_notificaciones(websocket: WebSocket):
     await websocket.accept()
     print("🔔 WebSocket de notificaciones aceptado")
     
-    db = SessionLocal()
     user = None
     current_token = None
     revalidation_task = None
     
     try:
-        # Extraer token
-        auth = websocket.headers.get("authorization")
-        if auth and auth.startswith("Bearer "):
-            current_token = auth.split(" ", 1)[1]
-        else:
-            current_token = websocket.query_params.get("token")
-        
-        if not current_token:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Token no proporcionado"
-            }))
-            await websocket.close(code=1008)
-            return
-        
-        # Autenticar
+        # ═══════════════════════════════════════════════════════
+        # 1️⃣ AUTENTICACIÓN (abre DB, valida, cierra)
+        # ═══════════════════════════════════════════════════════
+        db = SessionLocal()
         try:
+            # Extraer token
+            auth = websocket.headers.get("authorization")
+            if auth and auth.startswith("Bearer "):
+                current_token = auth.split(" ", 1)[1]
+            else:
+                current_token = websocket.query_params.get("token")
+            
+            if not current_token:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Token no proporcionado"
+                }))
+                await websocket.close(code=1008)
+                return
+            
+            # Autenticar
             user = await get_current_user_ws(websocket, db)
             print(f"🔔 Usuario {user.id} autenticado para notificaciones")
-        except Exception as e:
-            print(f"❌ Error al autenticar: {e}")
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": f"Autenticación fallida: {str(e)}"
-            }))
-            await websocket.close(code=1008)
-            return
+            
+        finally:
+            db.close()  # ← CERRAR DB después de autenticación
+            print("🔒 Sesión DB cerrada después de autenticación (notificaciones)")
         
-        # Conectar usuario
+        # ═══════════════════════════════════════════════════════
+        # 2️⃣ CONECTAR AL MANAGER (sin DB)
+        # ═══════════════════════════════════════════════════════
         await grupo_notification_manager.connect_user(user.id, websocket)
         
-        # Enviar estado inicial
-        await grupo_notification_manager.notify_unread_count_changed(user.id, db)
+        # ═══════════════════════════════════════════════════════
+        # 3️⃣ ENVIAR ESTADO INICIAL (abre/cierra DB temporal)
+        # ═══════════════════════════════════════════════════════
+        # El manager abrirá/cerrará DB automáticamente si no se pasa db
+        await grupo_notification_manager.notify_unread_count_changed(user.id)
         
-        # 🆕 Tarea de revalidación de token mejorada
+        # ═══════════════════════════════════════════════════════
+        # 4️⃣ TAREA DE REVALIDACIÓN (sin DB)
+        # ═══════════════════════════════════════════════════════
         async def revalidate_token():
             """Revalida el token cada 60 segundos y muestra el tiempo de expiración"""
             contador_checks = 0
@@ -724,7 +719,7 @@ async def websocket_notificaciones(websocket: WebSocket):
                             tiempo_restante = exp_timestamp - ahora
                             minutos_restantes = tiempo_restante / 60
                             
-                            # 🆕 Solo loguear si hay cambios significativos o cada 5 checks
+                            # Solo loguear si hay cambios significativos o cada 5 checks
                             debe_loguear = (
                                 ultimo_tiempo_reportado is None or
                                 abs(minutos_restantes - ultimo_tiempo_reportado) > 0.5 or
@@ -782,13 +777,16 @@ async def websocket_notificaciones(websocket: WebSocket):
         
         revalidation_task = asyncio.create_task(revalidate_token())
         
-        # Mantener conexión viva
+        # ═══════════════════════════════════════════════════════
+        # 5️⃣ LOOP PRINCIPAL (sin DB abierta permanentemente)
+        # ═══════════════════════════════════════════════════════
         while True:
             raw = await websocket.receive_text()
             payload = json.loads(raw)
             
             if payload.get("action") == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
+            
             elif payload.get("action") == "refresh_token":
                 new_token = payload.get("data", {}).get("token")
                 if new_token:
@@ -821,4 +819,6 @@ async def websocket_notificaciones(websocket: WebSocket):
         
         if user:
             await grupo_notification_manager.disconnect_user(user.id)
-        db.close()
+        
+        # ← NO HAY db.close() aquí porque ya no tenemos sesión abierta
+        print(f"🔔 Limpieza completada para usuario {user.id if user else 'desconocido'}")
