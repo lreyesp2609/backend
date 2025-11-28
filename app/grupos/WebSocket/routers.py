@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 import json
 import asyncio
 import traceback
@@ -8,10 +8,11 @@ from jose import jwt, JWTError
 from sqlalchemy import func, and_
 from ...database.database import SessionLocal
 from ..models import Grupo, MiembroGrupo, Mensaje, LecturaMensaje
+from ...usuarios.models import Usuario
 from ...usuarios.security import get_current_user_ws, SECRET_KEY, ALGORITHM
 from .ws_manager import WebSocketManager, UbicacionManager, grupo_notification_manager
-from ...services.fcm_service import fcm_service  # ✅ AGREGAR
-from ...usuarios.models import FCMToken  # ✅ AGREGAR
+from ...services.fcm_service import fcm_service
+from ...usuarios.models import FCMToken
 
 router = APIRouter()
 manager = WebSocketManager()
@@ -91,6 +92,8 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
     print("🔹 WebSocket aceptado, iniciando validaciones...")
     
     user = None
+    user_id = None
+    user_nombre_completo = None  # ✅ NUEVA VARIABLE
     current_token = None
     revalidation_task = None
     
@@ -117,7 +120,26 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
             
             # Autenticar usuario
             user = await get_current_user_ws(websocket, db)
-            print(f"🔹 Usuario conectado: ID={user.id}, activo={user.activo}")
+            
+            # ✅ CARGAR datos_personales con eager loading
+            user = db.query(Usuario).options(
+                joinedload(Usuario.datos_personales)
+            ).filter(Usuario.id == user.id).first()
+            
+            if not user:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Usuario no encontrado"
+                }))
+                await websocket.close(code=1008)
+                return
+            
+            # ✅ EXTRAER datos a variables simples INMEDIATAMENTE
+            user_id = user.id
+            user_activo = user.activo
+            user_nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+            
+            print(f"🔹 Usuario conectado: ID={user_id}, activo={user_activo}, nombre={user_nombre_completo}")
             
             # Validar grupo
             grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
@@ -133,16 +155,16 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
             # Verificar permisos
             miembro = db.query(MiembroGrupo).filter_by(
-                usuario_id=user.id, 
+                usuario_id=user_id,  # ✅ USAR user_id
                 grupo_id=grupo_id, 
                 activo=True
             ).first()
             
-            es_creador = grupo.creado_por_id == user.id
+            es_creador = grupo.creado_por_id == user_id  # ✅ USAR user_id
             print(f"🔹 Miembro encontrado: {miembro}, Es creador: {es_creador}")
             
             if not miembro and not es_creador:
-                print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
+                print(f"❌ Usuario {user_id} no pertenece al grupo {grupo_id}")
                 await websocket.send_text(json.dumps({
                     "type": "error",
                     "message": "No tienes acceso a este grupo"
@@ -150,18 +172,18 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 await websocket.close(code=1008)
                 return
 
-            websocket.usuario_id = user.id
+            websocket.usuario_id = user_id  # ✅ USAR user_id
 
             # Marcar mensajes como leídos al conectar
             mensajes_no_leidos = db.query(Mensaje).outerjoin(
                 LecturaMensaje,
                 and_(
                     LecturaMensaje.mensaje_id == Mensaje.id,
-                    LecturaMensaje.usuario_id == user.id
+                    LecturaMensaje.usuario_id == user_id  # ✅ USAR user_id
                 )
             ).filter(
                 Mensaje.grupo_id == grupo_id,
-                Mensaje.remitente_id != user.id,
+                Mensaje.remitente_id != user_id,  # ✅ USAR user_id
                 LecturaMensaje.id == None
             ).all()
             
@@ -170,7 +192,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 for mensaje in mensajes_no_leidos:
                     lectura = LecturaMensaje(
                         mensaje_id=mensaje.id,
-                        usuario_id=user.id,
+                        usuario_id=user_id,  # ✅ USAR user_id
                         leido_at=datetime.now(timezone.utc)
                     )
                     db.add(lectura)
@@ -178,7 +200,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 print(f"✅ {len(mensajes_no_leidos)} mensajes marcados como leídos")
             
             # Notificar contador actualizado
-            await grupo_notification_manager.notify_unread_count_changed(user.id, db)
+            await grupo_notification_manager.notify_unread_count_changed(user_id, db)  # ✅ USAR user_id
             
         finally:
             db.close()  # ← CERRAR DB después de autenticación
@@ -187,8 +209,8 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
         # ═══════════════════════════════════════════════════════
         # 2️⃣ CONECTAR AL MANAGER (sin DB)
         # ═══════════════════════════════════════════════════════
-        await manager.connect(grupo_id, user.id, websocket)
-        print(f"✅ Usuario {user.id} conectado al grupo {grupo_id}")
+        await manager.connect(grupo_id, user_id, websocket)  # ✅ USAR user_id
+        print(f"✅ Usuario {user_id} conectado al grupo {grupo_id}")  # ✅ USAR user_id
 
         # ═══════════════════════════════════════════════════════
         # 3️⃣ TAREA DE REVALIDACIÓN (sin DB)
@@ -272,7 +294,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     try:
                         jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
                         current_token = new_token
-                        print(f"🔄 Token actualizado para usuario {user.id}")
+                        print(f"🔄 Token actualizado para usuario {user_id}")
                         await websocket.send_text(json.dumps({
                             "type": "token_refreshed",
                             "message": "Token actualizado correctamente"
@@ -295,7 +317,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 try:
                     # 1️⃣ Guardar mensaje en BD
                     mensaje = Mensaje(
-                        remitente_id=user.id,
+                        remitente_id=user_id,
                         grupo_id=grupo_id,
                         contenido=contenido,
                         tipo=tipo,
@@ -308,7 +330,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     # 2️⃣ Marcar como leído para el remitente
                     lectura = LecturaMensaje(
                         mensaje_id=mensaje.id,
-                        usuario_id=user.id,
+                        usuario_id=user_id,
                         leido_at=datetime.now(timezone.utc)
                     )
                     db.add(lectura)
@@ -345,7 +367,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     tokens_para_fcm = []
                     
                     for miembro_id in miembros_ids:
-                        if miembro_id != user.id:
+                        if miembro_id != user_id:
                             # Actualizar contador
                             await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
                             
@@ -376,14 +398,14 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                                 tokens_para_fcm.extend([t.token for t in tokens_usuario])
                                 print(f"📱 Usuario {miembro_id}: {mensajes_no_leidos} no leídos")
 
-                    # 7️⃣ FCM en background
+                    # 7️⃣ Preparar datos para FCM ANTES de cerrar DB
                     fcm_data = None
                     if tokens_para_fcm:
                         fcm_data = {
                             'tokens': tokens_para_fcm,
                             'grupo_id': grupo_id,
                             'grupo_nombre': grupo.nombre,
-                            'remitente_nombre': f"{user.datos_personales.nombre} {user.datos_personales.apellido}",
+                            'remitente_nombre': user_nombre_completo,  # ✅ USAR variable
                             'mensaje': contenido,
                             'timestamp': int(mensaje.fecha_creacion.timestamp() * 1000)
                         }
