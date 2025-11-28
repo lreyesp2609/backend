@@ -8,7 +8,10 @@ import locale
 try:
     locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 except locale.Error:
-    locale.setlocale(locale.LC_TIME, 'es_ES')
+    try:
+        locale.setlocale(locale.LC_TIME, 'es_ES')
+    except locale.Error:
+        pass
 
 def create_reminder(db: Session, reminder_data: ReminderCreate, user_id: int):
     try:
@@ -24,15 +27,7 @@ def create_reminder(db: Session, reminder_data: ReminderCreate, user_id: int):
                 detail="Ya existe un recordatorio con ese título"
             )
 
-        # ✅ CORRECCIÓN: No convertir days, ya viene como string desde el validator
         reminder_dict = reminder_data.dict()
-        
-        # ❌ ELIMINAR ESTAS LÍNEAS:
-        # if reminder_dict.get('days'):
-        #     reminder_dict['days'] = ','.join(reminder_dict['days'])
-        
-        # ✅ El campo 'days' ya viene como string "Lunes,Martes,..."
-        # gracias al validator normalize_days() en schemas.py
         
         print(f"🔍 DEBUG CREATE REMINDER:")
         print(f"   days tipo: {type(reminder_dict.get('days'))}")
