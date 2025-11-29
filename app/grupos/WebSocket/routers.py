@@ -1,4 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from jwt import ExpiredSignatureError
 from sqlalchemy.orm import Session, joinedload
 import json
 import asyncio
@@ -461,109 +462,124 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
 @router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
-    await websocket.accept()
-    print("📍 WebSocket de ubicaciones aceptado")
-    
-    user = None
-    user_id = None  # ✅ AGREGAR
-    nombre_completo = None  # ✅ AGREGAR
+    # ═══════════════════════════════════════════════════════
+    # 🔐 VALIDACIÓN PREVIA (ANTES DE ACCEPT)
+    # ═══════════════════════════════════════════════════════
+    user_id = None
+    nombre_completo = None
     current_token = None
+    
+    try:
+        # 1️⃣ Extraer token ANTES de accept
+        auth = websocket.headers.get("authorization")
+        if auth and auth.startswith("Bearer "):
+            current_token = auth.split(" ", 1)[1]
+        else:
+            current_token = websocket.query_params.get("token")
+        
+        if not current_token:
+            await websocket.close(code=1008, reason="Token no proporcionado")
+            return
+        
+        # 2️⃣ Validar token ANTES de accept
+        db = SessionLocal()
+        try:
+            try:
+                payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
+                user_id = payload.get("id_usuario")
+                
+                if user_id is None:
+                    await websocket.close(code=1008, reason="Token inválido")
+                    return
+                
+            except ExpiredSignatureError:
+                await websocket.close(code=1008, reason="Token expirado")
+                return
+            except JWTError as e:
+                await websocket.close(code=1008, reason=f"Token inválido: {str(e)}")
+                return
+            
+            # 3️⃣ Buscar usuario ANTES de accept
+            user = db.query(Usuario).options(
+                joinedload(Usuario.datos_personales)
+            ).filter(
+                Usuario.id == user_id,
+                Usuario.activo == True
+            ).first()
+            
+            if not user:
+                await websocket.close(code=1008, reason="Usuario no encontrado o inactivo")
+                return
+            
+            nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+            
+            # 4️⃣ Validar permisos del grupo ANTES de accept
+            grupo = db.query(Grupo).filter(
+                Grupo.id == grupo_id, 
+                Grupo.is_deleted == False
+            ).first()
+            
+            if not grupo:
+                await websocket.close(code=1008, reason=f"Grupo {grupo_id} no encontrado")
+                return
+            
+            miembro = db.query(MiembroGrupo).filter_by(
+                usuario_id=user_id,
+                grupo_id=grupo_id,
+                activo=True
+            ).first()
+            
+            if not miembro and grupo.creado_por_id != user_id:
+                await websocket.close(code=1008, reason=f"Usuario no pertenece al grupo {grupo_id}")
+                return
+            
+            grupo_nombre = grupo.nombre
+            es_creador_grupo = (grupo.creado_por_id == user_id)
+
+        finally:
+            db.close()
+        
+        # ═══════════════════════════════════════════════════════
+        # ✅ TODO VALIDADO - AHORA SÍ ACEPTAR
+        # ═══════════════════════════════════════════════════════
+        await websocket.accept()
+        print(f"✅ WebSocket aceptado para usuario {user_id} en grupo {grupo_id}")
+        
+    except Exception as e:
+        print(f"❌ Error en validación previa: {e}")
+        try:
+            await websocket.close(code=1008, reason="Error en validación")
+        except:
+            pass
+        return
+    
+    # ═══════════════════════════════════════════════════════
+    # 🔄 RESTO DEL CÓDIGO (después de accept)
+    # ═══════════════════════════════════════════════════════
     heartbeat_task = None
     revalidation_task = None
     
     try:
-        # ═══════════════════════════════════════════════════════
-        # 1️⃣ AUTENTICACIÓN (abre DB, valida, cierra)
-        # ═══════════════════════════════════════════════════════
-        db = SessionLocal()
-        try:
-            # Extraer token
-            auth = websocket.headers.get("authorization")
-            if auth and auth.startswith("Bearer "):
-                current_token = auth.split(" ", 1)[1]
-            else:
-                current_token = websocket.query_params.get("token")
-            
-            if not current_token:
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "message": "Token no proporcionado"
-                }))
-                await websocket.close(code=1008)
-                return
-            
-            # Autenticar usuario
-            user = await get_current_user_ws(websocket, db)
-            
-            # ✅ CARGAR datos_personales con eager loading
-            user = db.query(Usuario).options(
-                joinedload(Usuario.datos_personales)
-            ).filter(Usuario.id == user.id).first()
-            
-            if not user:
-                print("❌ Usuario no encontrado después de autenticación")
-                await websocket.close(code=1008)
-                return
-            
-            # ✅ EXTRAER datos a variables INMEDIATAMENTE
-            user_id = user.id
-            nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
-            
-            print(f"📍 Usuario conectado a ubicaciones: ID={user_id}, nombre={nombre_completo}")
-            
-            # Validar grupo y permisos
-            grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
-            if not grupo:
-                print(f"❌ Grupo {grupo_id} no encontrado")
-                await websocket.close(code=1008)
-                return
-            
-            miembro = db.query(MiembroGrupo).filter_by(
-                usuario_id=user_id,  # ✅ USAR user_id
-                grupo_id=grupo_id, 
-                activo=True
-            ).first()
-            
-            if not miembro and grupo.creado_por_id != user_id:  # ✅ USAR user_id
-                print(f"❌ Usuario {user_id} no pertenece al grupo {grupo_id}")
-                await websocket.close(code=1008)
-                return
-            
-            # ✅ Variables ya están listas
-            grupo_nombre = grupo.nombre
-            
-        finally:
-            db.close()  # ← CERRAR DB después de autenticación
-            print("🔒 Sesión DB cerrada después de autenticación (ubicaciones)")
+        # Conectar al manager
+        await ubicacion_manager.connect_ubicacion(grupo_id, user_id, websocket)
         
-        # ═══════════════════════════════════════════════════════
-        # 2️⃣ CONECTAR AL MANAGER (sin DB)
-        # ═══════════════════════════════════════════════════════
-        await ubicacion_manager.connect_ubicacion(grupo_id, user_id, websocket)  # ✅ USAR user_id
-        
-        # ═══════════════════════════════════════════════════════
-        # 3️⃣ TAREA DE REVALIDACIÓN (sin DB)
-        # ═══════════════════════════════════════════════════════
+        # Tarea de revalidación
         async def revalidate_token():
-            """Revalida el token cada 60 segundos"""
             while True:
                 await asyncio.sleep(60)
                 try:
                     if current_token:
                         payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
-                        
                         exp_timestamp = payload.get("exp")
                         if exp_timestamp:
                             ahora = datetime.now(timezone.utc).timestamp()
                             tiempo_restante = exp_timestamp - ahora
-                            print(f"📍⏱️ Token ubicaciones válido. Expira en {tiempo_restante/60:.1f} minutos")
                             
                             if tiempo_restante <= 0:
-                                print(f"📍❌ Token expiró hace {abs(tiempo_restante)/60:.1f} minutos")
                                 await websocket.send_text(json.dumps({
                                     "type": "error",
                                     "code": "TOKEN_EXPIRED",
-                                    "message": "Tu sesión ha expirado. Reconecta con un nuevo token."
+                                    "message": "Tu sesión ha expirado"
                                 }))
                                 await websocket.close(code=1008)
                                 break
@@ -572,26 +588,19 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                                 await websocket.send_text(json.dumps({
                                     "type": "warning",
                                     "code": "TOKEN_EXPIRING_SOON",
-                                    "message": "Tu sesión expirará pronto. Por favor, actualiza tu token.",
+                                    "message": "Tu sesión expirará pronto",
                                     "seconds_remaining": int(tiempo_restante)
                                 }))
-                        
-                except JWTError as e:
-                    print(f"📍⚠️ Token expirado o inválido para usuario {user_id}: {e}")  # ✅ USAR user_id
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "code": "TOKEN_EXPIRED",
-                        "message": "Tu sesión ha expirado. Reconecta con un nuevo token."
-                    }))
+                except JWTError:
                     await websocket.close(code=1008)
                     break
                 except Exception as e:
-                    print(f"📍❌ Error en revalidación: {e}")
+                    print(f"❌ Error en revalidación: {e}")
                     break
         
         revalidation_task = asyncio.create_task(revalidate_token())
         
-        # Enviar ubicaciones actuales del grupo (sin DB)
+        # Enviar ubicaciones iniciales
         ubicaciones_actuales = ubicacion_manager.get_ubicaciones_grupo(grupo_id)
         await websocket.send_text(json.dumps({
             "type": "ubicaciones_iniciales",
@@ -601,10 +610,11 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                     "nombre": data["nombre"],
                     "lat": data["lat"],
                     "lon": data["lon"],
-                    "timestamp": data["timestamp"]
+                    "timestamp": data["timestamp"],
+                    "es_creador": data.get("es_creador", False)  # 🆕 AGREGAR ESTO
                 }
                 for uid, data in ubicaciones_actuales.items()
-                if uid != user_id  # ✅ USAR user_id
+                if uid != user_id
             ]
         }))
         
@@ -614,9 +624,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             "grupo_id": grupo_id
         }))
         
-        # ═══════════════════════════════════════════════════════
-        # 4️⃣ HEARTBEAT (sin DB)
-        # ═══════════════════════════════════════════════════════
+        # Heartbeat
         async def heartbeat():
             while True:
                 await asyncio.sleep(30)
@@ -627,21 +635,17 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         
         heartbeat_task = asyncio.create_task(heartbeat())
         
-        # ═══════════════════════════════════════════════════════
-        # 5️⃣ LOOP PRINCIPAL (sin DB abierta permanentemente)
-        # ═══════════════════════════════════════════════════════
+        # Loop principal
         while True:
             raw = await websocket.receive_text()
             payload = json.loads(raw)
             
-            # Refresh token (sin DB)
             if payload.get("type") == "refresh_token":
                 new_token = payload.get("token")
                 if new_token:
                     try:
                         jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
                         current_token = new_token
-                        print(f"📍🔄 Token actualizado para usuario {user_id}")  # ✅ USAR user_id
                         await websocket.send_text(json.dumps({
                             "type": "token_refreshed",
                             "message": "Token actualizado correctamente"
@@ -649,61 +653,39 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                     except JWTError:
                         await websocket.send_text(json.dumps({
                             "type": "error",
-                            "message": "Token inválido proporcionado"
+                            "message": "Token inválido"
                         }))
                 continue
             
-            # Actualizar ubicación (sin DB, solo broadcast en memoria)
             if payload.get("type") == "ubicacion":
                 lat = payload.get("lat")
                 lon = payload.get("lon")
                 
                 if lat is not None and lon is not None:
                     data = {
-                        "nombre": nombre_completo,  # ✅ USAR variable
+                        "nombre": nombre_completo,
                         "lat": lat,
                         "lon": lon,
-                        "timestamp": datetime.now(timezone.utc).isoformat()
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "es_creador": es_creador_grupo  # 🆕 USAR VARIABLE GUARDADA
                     }
-                    # Broadcast solo usa memoria, no DB
-                    await ubicacion_manager.broadcast_ubicacion(grupo_id, user_id, data)  # ✅ USAR user_id
+                    await ubicacion_manager.broadcast_ubicacion(grupo_id, user_id, data)
             
             elif payload.get("type") == "pong":
-                pass  # Respuesta al ping
+                pass
     
     except WebSocketDisconnect:
-        print(f"📍 Usuario {user_id if user_id else 'desconocido'} desconectado de ubicaciones")  # ✅ USAR user_id
+        print(f"📍 Usuario {user_id} desconectado")
     except Exception as e:
-        print(f"❌ Error en WebSocket ubicaciones: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Error interno del servidor"
-            }))
-        except:
-            pass
     finally:
-        # Cancelar tareas (sin DB)
         if heartbeat_task:
             heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                print("📍 Tarea de heartbeat cancelada")
-        
         if revalidation_task:
             revalidation_task.cancel()
-            try:
-                await revalidation_task
-            except asyncio.CancelledError:
-                print("📍 Tarea de revalidación cancelada")
-        
-        # Desconectar (sin DB)
-        if user_id:  # ✅ CAMBIAR CONDICIÓN
-            await ubicacion_manager.disconnect_ubicacion(grupo_id, user_id)  # ✅ USAR user_id
-        
-        print(f"📍 Usuario {user_id if user_id else 'desconocido'} desconectado del grupo {grupo_id} (ubicaciones)")  # ✅ USAR user_id
+        if user_id:
+            await ubicacion_manager.disconnect_ubicacion(grupo_id, user_id)
 
 @router.websocket("/ws/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):

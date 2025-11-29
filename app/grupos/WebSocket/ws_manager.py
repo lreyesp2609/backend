@@ -166,7 +166,8 @@ class UbicacionManager:
                     "nombre": data["nombre"],
                     "lat": data["lat"],
                     "lon": data["lon"],
-                    "timestamp": data["timestamp"]
+                    "timestamp": data["timestamp"],
+                    "es_creador": data.get("es_creador", False)  # 🆕 AGREGAR ESTO
                 })
                 
                 for uid, ws in self.active_locations[grupo_id].items():
