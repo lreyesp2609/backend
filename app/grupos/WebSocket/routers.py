@@ -448,7 +448,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 print("🔹 Tarea de revalidación cancelada")
         
         if user:
-            await manager.disconnect(grupo_id, user.id)
+            await manager.disconnect(grupo_id, user_id)            
             
             # Actualizar contador final (abre/cierra DB)
             try:
@@ -457,7 +457,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
             except Exception as e:
                 print(f"⚠️ Error actualizando contador: {e}")
         
-        print(f"🔹 Usuario {user.id if user else 'desconocido'} desconectado del grupo {grupo_id}")
+        print(f"🔹 Usuario {user_id if user_id else 'desconocido'} desconectado del grupo {grupo_id}")
 
 @router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):

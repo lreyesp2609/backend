@@ -2,6 +2,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 from typing import List, Optional, Dict
 import os
+import json
 import logging
 import time
 
@@ -28,26 +29,51 @@ class FCMService:
     def _initialize_firebase(self):
         """Inicializa Firebase Admin SDK una sola vez"""
         try:
-            # Ruta al archivo de credenciales (raíz del proyecto)
-            # app/services/fcm_service.py -> ../../firebase-credentials.json
+            # ✅ PRIORIDAD 1: Variable de entorno (RENDER/PRODUCCIÓN)
+            firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+            
+            if firebase_creds:
+                logger.info("🔥 Inicializando Firebase desde variable de entorno")
+                try:
+                    # Parsear JSON desde string
+                    cred_dict = json.loads(firebase_creds)
+                    cred = credentials.Certificate(cred_dict)
+                    firebase_admin.initialize_app(cred)
+                    logger.info("✅ Firebase inicializado correctamente desde variable de entorno")
+                    return
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Error parseando FIREBASE_CREDENTIALS: {e}")
+                    logger.error("   Asegúrate de que sea un JSON válido")
+                except Exception as e:
+                    logger.error(f"❌ Error con variable de entorno: {e}")
+            
+            # ✅ PRIORIDAD 2: Archivo local (DESARROLLO)
             current_dir = os.path.dirname(__file__)
             cred_path = os.path.abspath(os.path.join(current_dir, "..", "..", "firebase-credentials.json"))
             
-            if not os.path.exists(cred_path):
-                logger.warning("⚠️ Archivo firebase-credentials.json no encontrado")
-                logger.warning(f"   Buscado en: {cred_path}")
-                logger.warning("   Las notificaciones FCM no funcionarán")
+            if os.path.exists(cred_path):
+                logger.info(f"🔥 Inicializando Firebase desde archivo: {cred_path}")
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred)
+                logger.info("✅ Firebase inicializado correctamente desde archivo")
                 return
             
-            cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred)
-            logger.info("🔥 Firebase Admin SDK inicializado correctamente")
+            # ❌ No se encontró ninguna configuración
+            logger.warning("⚠️ No se encontraron credenciales de Firebase")
+            logger.warning(f"   Archivo buscado en: {cred_path}")
+            logger.warning(f"   Variable FIREBASE_CREDENTIALS: {'Configurada' if firebase_creds else 'No configurada'}")
+            logger.warning("   Las notificaciones FCM NO funcionarán")
             
         except ValueError as e:
             # Ya está inicializado (puede pasar en hot-reload)
-            logger.info("ℹ️ Firebase ya estaba inicializado")
+            if "already exists" in str(e).lower():
+                logger.info("ℹ️ Firebase ya estaba inicializado")
+            else:
+                logger.error(f"❌ ValueError inicializando Firebase: {e}")
         except Exception as e:
             logger.error(f"❌ Error inicializando Firebase: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def enviar_notificacion_mensaje(
         self,
@@ -270,6 +296,8 @@ class FCMService:
                 
         except Exception as e:
             logger.error(f"❌ Error en envío: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "exitosos": 0,
                 "fallidos": len(tokens),
