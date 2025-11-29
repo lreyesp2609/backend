@@ -465,6 +465,8 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
     print("📍 WebSocket de ubicaciones aceptado")
     
     user = None
+    user_id = None  # ✅ AGREGAR
+    nombre_completo = None  # ✅ AGREGAR
     current_token = None
     heartbeat_task = None
     revalidation_task = None
@@ -492,7 +494,22 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             
             # Autenticar usuario
             user = await get_current_user_ws(websocket, db)
-            print(f"📍 Usuario conectado a ubicaciones: ID={user.id}")
+            
+            # ✅ CARGAR datos_personales con eager loading
+            user = db.query(Usuario).options(
+                joinedload(Usuario.datos_personales)
+            ).filter(Usuario.id == user.id).first()
+            
+            if not user:
+                print("❌ Usuario no encontrado después de autenticación")
+                await websocket.close(code=1008)
+                return
+            
+            # ✅ EXTRAER datos a variables INMEDIATAMENTE
+            user_id = user.id
+            nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+            
+            print(f"📍 Usuario conectado a ubicaciones: ID={user_id}, nombre={nombre_completo}")
             
             # Validar grupo y permisos
             grupo = db.query(Grupo).filter(Grupo.id == grupo_id, Grupo.is_deleted == False).first()
@@ -502,18 +519,17 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                 return
             
             miembro = db.query(MiembroGrupo).filter_by(
-                usuario_id=user.id, 
+                usuario_id=user_id,  # ✅ USAR user_id
                 grupo_id=grupo_id, 
                 activo=True
             ).first()
             
-            if not miembro and grupo.creado_por_id != user.id:
-                print(f"❌ Usuario {user.id} no pertenece al grupo {grupo_id}")
+            if not miembro and grupo.creado_por_id != user_id:  # ✅ USAR user_id
+                print(f"❌ Usuario {user_id} no pertenece al grupo {grupo_id}")
                 await websocket.close(code=1008)
                 return
             
-            # Obtener nombre del usuario y grupo
-            nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
+            # ✅ Variables ya están listas
             grupo_nombre = grupo.nombre
             
         finally:
@@ -523,7 +539,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         # ═══════════════════════════════════════════════════════
         # 2️⃣ CONECTAR AL MANAGER (sin DB)
         # ═══════════════════════════════════════════════════════
-        await ubicacion_manager.connect_ubicacion(grupo_id, user.id, websocket)
+        await ubicacion_manager.connect_ubicacion(grupo_id, user_id, websocket)  # ✅ USAR user_id
         
         # ═══════════════════════════════════════════════════════
         # 3️⃣ TAREA DE REVALIDACIÓN (sin DB)
@@ -561,7 +577,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                                 }))
                         
                 except JWTError as e:
-                    print(f"📍⚠️ Token expirado o inválido para usuario {user.id}: {e}")
+                    print(f"📍⚠️ Token expirado o inválido para usuario {user_id}: {e}")  # ✅ USAR user_id
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "code": "TOKEN_EXPIRED",
@@ -588,7 +604,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                     "timestamp": data["timestamp"]
                 }
                 for uid, data in ubicaciones_actuales.items()
-                if uid != user.id  # No enviar la propia
+                if uid != user_id  # ✅ USAR user_id
             ]
         }))
         
@@ -625,7 +641,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                     try:
                         jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
                         current_token = new_token
-                        print(f"📍🔄 Token actualizado para usuario {user.id}")
+                        print(f"📍🔄 Token actualizado para usuario {user_id}")  # ✅ USAR user_id
                         await websocket.send_text(json.dumps({
                             "type": "token_refreshed",
                             "message": "Token actualizado correctamente"
@@ -644,19 +660,19 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                 
                 if lat is not None and lon is not None:
                     data = {
-                        "nombre": nombre_completo,
+                        "nombre": nombre_completo,  # ✅ USAR variable
                         "lat": lat,
                         "lon": lon,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }
                     # Broadcast solo usa memoria, no DB
-                    await ubicacion_manager.broadcast_ubicacion(grupo_id, user.id, data)
+                    await ubicacion_manager.broadcast_ubicacion(grupo_id, user_id, data)  # ✅ USAR user_id
             
             elif payload.get("type") == "pong":
                 pass  # Respuesta al ping
     
     except WebSocketDisconnect:
-        print(f"📍 Usuario {user.id if user else 'desconocido'} desconectado de ubicaciones")
+        print(f"📍 Usuario {user_id if user_id else 'desconocido'} desconectado de ubicaciones")  # ✅ USAR user_id
     except Exception as e:
         print(f"❌ Error en WebSocket ubicaciones: {e}")
         traceback.print_exc()
@@ -684,10 +700,10 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                 print("📍 Tarea de revalidación cancelada")
         
         # Desconectar (sin DB)
-        if user:
-            await ubicacion_manager.disconnect_ubicacion(grupo_id, user.id)
+        if user_id:  # ✅ CAMBIAR CONDICIÓN
+            await ubicacion_manager.disconnect_ubicacion(grupo_id, user_id)  # ✅ USAR user_id
         
-        print(f"📍 Usuario {user.id if user else 'desconocido'} desconectado del grupo {grupo_id} (ubicaciones)")
+        print(f"📍 Usuario {user_id if user_id else 'desconocido'} desconectado del grupo {grupo_id} (ubicaciones)")  # ✅ USAR user_id
 
 @router.websocket("/ws/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
