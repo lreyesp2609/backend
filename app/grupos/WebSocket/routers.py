@@ -462,15 +462,12 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
 @router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
-    # ═══════════════════════════════════════════════════════
-    # 🔐 VALIDACIÓN PREVIA (ANTES DE ACCEPT)
-    # ═══════════════════════════════════════════════════════
     user_id = None
     nombre_completo = None
     current_token = None
     
     try:
-        # 1️⃣ Extraer token ANTES de accept
+        # 1️⃣ Extraer token
         auth = websocket.headers.get("authorization")
         if auth and auth.startswith("Bearer "):
             current_token = auth.split(" ", 1)[1]
@@ -481,25 +478,17 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             await websocket.close(code=1008, reason="Token no proporcionado")
             return
         
-        # 2️⃣ Validar token ANTES de accept
+        # 2️⃣ Validar token
         db = SessionLocal()
         try:
-            try:
-                payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
-                user_id = payload.get("id_usuario")
-                
-                if user_id is None:
-                    await websocket.close(code=1008, reason="Token inválido")
-                    return
-                
-            except ExpiredSignatureError:
-                await websocket.close(code=1008, reason="Token expirado")
-                return
-            except JWTError as e:
-                await websocket.close(code=1008, reason=f"Token inválido: {str(e)}")
+            payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("id_usuario")
+            
+            if user_id is None:
+                await websocket.close(code=1008, reason="Token inválido")
                 return
             
-            # 3️⃣ Buscar usuario ANTES de accept
+            # ... resto de validaciones de usuario y grupo ...
             user = db.query(Usuario).options(
                 joinedload(Usuario.datos_personales)
             ).filter(
@@ -508,12 +497,11 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             ).first()
             
             if not user:
-                await websocket.close(code=1008, reason="Usuario no encontrado o inactivo")
+                await websocket.close(code=1008, reason="Usuario no encontrado")
                 return
             
             nombre_completo = f"{user.datos_personales.nombre} {user.datos_personales.apellido}"
             
-            # 4️⃣ Validar permisos del grupo ANTES de accept
             grupo = db.query(Grupo).filter(
                 Grupo.id == grupo_id, 
                 Grupo.is_deleted == False
@@ -530,7 +518,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             ).first()
             
             if not miembro and grupo.creado_por_id != user_id:
-                await websocket.close(code=1008, reason=f"Usuario no pertenece al grupo {grupo_id}")
+                await websocket.close(code=1008, reason=f"Usuario no pertenece al grupo")
                 return
             
             grupo_nombre = grupo.nombre
@@ -539,9 +527,20 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         finally:
             db.close()
         
-        # ═══════════════════════════════════════════════════════
-        # ✅ TODO VALIDADO - AHORA SÍ ACEPTAR
-        # ═══════════════════════════════════════════════════════
+        # 🔥 NUEVO: CERRAR CONEXIÓN PREVIA **ANTES** DE ACCEPT
+        if grupo_id in ubicacion_manager.active_locations:
+            if user_id in ubicacion_manager.active_locations[grupo_id]:
+                old_ws = ubicacion_manager.active_locations[grupo_id][user_id]
+                try:
+                    await old_ws.close(code=1000, reason="Nueva conexión establecida")
+                    print(f"🔄 Conexión previa cerrada ANTES de accept para usuario {user_id}")
+                except Exception as e:
+                    print(f"⚠️ Error cerrando conexión previa: {e}")
+                
+                # Limpiar del diccionario
+                ubicacion_manager.active_locations[grupo_id].pop(user_id, None)
+        
+        # ✅ AHORA SÍ ACEPTAR
         await websocket.accept()
         print(f"✅ WebSocket aceptado para usuario {user_id} en grupo {grupo_id}")
         
@@ -552,7 +551,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         except:
             pass
         return
-    
+
     # ═══════════════════════════════════════════════════════
     # 🔄 RESTO DEL CÓDIGO (después de accept)
     # ═══════════════════════════════════════════════════════
