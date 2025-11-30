@@ -87,7 +87,7 @@ async def enviar_fcm_en_background(
         except Exception as e:
             print(f"⚠️ Error cerrando sesión FCM: {e}")
 
-@router.websocket("/ws/grupos/{grupo_id}")
+@router.websocket("/ws/{grupo_id}")
 async def websocket_grupo(websocket: WebSocket, grupo_id: int):
     await websocket.accept()
     print("🔹 WebSocket aceptado, iniciando validaciones...")
@@ -460,7 +460,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
         
         print(f"🔹 Usuario {user_id if user_id else 'desconocido'} desconectado del grupo {grupo_id}")
 
-@router.websocket("/ws/grupos/{grupo_id}/ubicaciones")
+@router.websocket("/ws/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
     # ✅ ACEPTAR PRIMERO (igual que el chat)
     await websocket.accept()
