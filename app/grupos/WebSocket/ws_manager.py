@@ -133,8 +133,20 @@ class UbicacionManager:
         async with self.lock:
             if grupo_id not in self.active_locations:
                 self.active_locations[grupo_id] = {}
+            
+            # 🔥 SI YA HAY CONEXIÓN, CERRARLA ANTES
+            if user_id in self.active_locations[grupo_id]:
+                old_ws = self.active_locations[grupo_id][user_id]
+                try:
+                    await old_ws.close(code=1000, reason="Nueva conexión establecida")
+                    print(f"🔄 Conexión anterior cerrada para usuario {user_id} en grupo {grupo_id}")
+                except Exception as e:
+                    print(f"⚠️ Error al cerrar conexión anterior: {e}")
+            
+            # Registrar nueva conexión
             self.active_locations[grupo_id][user_id] = websocket
-            print(f"📍 Usuario {user_id} conectado a ubicaciones del grupo {grupo_id}")
+            print(f"✅ Usuario {user_id} conectado a ubicaciones del grupo {grupo_id}")
+            print(f"   Total usuarios conectados al grupo: {len(self.active_locations[grupo_id])}")
     
     async def disconnect_ubicacion(self, grupo_id: int, user_id: int):
         async with self.lock:
@@ -167,7 +179,7 @@ class UbicacionManager:
                     "lat": data["lat"],
                     "lon": data["lon"],
                     "timestamp": data["timestamp"],
-                    "es_creador": data.get("es_creador", False)  # 🆕 AGREGAR ESTO
+                    "es_creador": data.get("es_creador", False)
                 })
                 
                 for uid, ws in self.active_locations[grupo_id].items():
