@@ -478,7 +478,6 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
             await websocket.close(code=1008, reason="Token no proporcionado")
             return
         
-        # 2️⃣ Validar token
         db = SessionLocal()
         try:
             payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -488,7 +487,6 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
                 await websocket.close(code=1008, reason="Token inválido")
                 return
             
-            # ... resto de validaciones de usuario y grupo ...
             user = db.query(Usuario).options(
                 joinedload(Usuario.datos_personales)
             ).filter(
@@ -527,22 +525,12 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         finally:
             db.close()
         
-        # 🔥 NUEVO: CERRAR CONEXIÓN PREVIA **ANTES** DE ACCEPT
-        if grupo_id in ubicacion_manager.active_locations:
-            if user_id in ubicacion_manager.active_locations[grupo_id]:
-                old_ws = ubicacion_manager.active_locations[grupo_id][user_id]
-                try:
-                    await old_ws.close(code=1000, reason="Nueva conexión establecida")
-                    print(f"🔄 Conexión previa cerrada ANTES de accept para usuario {user_id}")
-                except Exception as e:
-                    print(f"⚠️ Error cerrando conexión previa: {e}")
-                
-                # Limpiar del diccionario
-                ubicacion_manager.active_locations[grupo_id].pop(user_id, None)
+        # 🔥 CRÍTICO: Cerrar conexión zombie ANTES de accept
+        await ubicacion_manager.force_disconnect_if_exists(grupo_id, user_id)
         
         # ✅ AHORA SÍ ACEPTAR
         await websocket.accept()
-        print(f"✅ WebSocket aceptado para usuario {user_id} en grupo {grupo_id}")
+        print(f"✅ WebSocket de ubicaciones aceptado para usuario {user_id} en grupo {grupo_id}")
         
     except Exception as e:
         print(f"❌ Error en validación previa: {e}")

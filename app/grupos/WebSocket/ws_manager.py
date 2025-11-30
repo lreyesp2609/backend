@@ -128,6 +128,21 @@ class UbicacionManager:
         self.active_locations: dict[int, dict[int, WebSocket]] = {}
         self.ubicaciones: dict[int, dict[int, dict]] = {}
         self.lock = asyncio.Lock()
+
+    async def force_disconnect_if_exists(self, grupo_id: int, user_id: int):
+        """Fuerza el cierre de una conexión existente ANTES de accept()"""
+        async with self.lock:
+            if grupo_id in self.active_locations and user_id in self.active_locations[grupo_id]:
+                old_ws = self.active_locations[grupo_id][user_id]
+                try:
+                    await old_ws.close(code=1000, reason="Nueva conexión solicitada")
+                    print(f"🔄 Conexión zombie cerrada para usuario {user_id} en grupo {grupo_id}")
+                except Exception as e:
+                    print(f"⚠️ Error cerrando zombie: {e}")
+                finally:
+                    self.active_locations[grupo_id].pop(user_id, None)
+                    if not self.active_locations[grupo_id]:
+                        del self.active_locations[grupo_id]
     
     async def connect_ubicacion(self, grupo_id: int, user_id: int, websocket: WebSocket):
         async with self.lock:
@@ -191,6 +206,9 @@ class UbicacionManager:
     def get_ubicaciones_grupo(self, grupo_id: int) -> dict:
         """Obtiene todas las ubicaciones activas de un grupo"""
         return self.ubicaciones.get(grupo_id, {})
+    
+
+    
 
 ubicacion_manager = UbicacionManager()
 
