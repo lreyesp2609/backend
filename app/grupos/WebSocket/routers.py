@@ -345,23 +345,30 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     if grupo.creado_por_id not in miembros_ids:
                         miembros_ids.append(grupo.creado_por_id)
 
-                    # 4️⃣ Preparar mensaje para WebSocket
+                    # 4️⃣ Calcular lecturas reales (excluyendo al remitente)
+                    total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
+                        LecturaMensaje.mensaje_id == mensaje.id,
+                        LecturaMensaje.usuario_id != mensaje.remitente_id  # 🔥 Excluir remitente
+                    ).scalar() or 0
+
+                    # Preparar mensaje para WebSocket
                     out = {
                         "type": "mensaje",
                         "data": {
                             "id": mensaje.id,
                             "remitente_id": mensaje.remitente_id,
+                            "remitente_nombre": user_nombre_completo,  # 🆕 Agregar nombre
                             "grupo_id": mensaje.grupo_id,
                             "contenido": mensaje.contenido,
                             "tipo": mensaje.tipo,
                             "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                            "leido": True,
-                            "leido_por": 1
+                            "leido": False,  # 🔥 Siempre False para mensajes nuevos
+                            "leido_por": total_lecturas  # 🔥 Conteo real sin el remitente
                         }
                     }
 
                     # 5️⃣ ENVIAR por WebSocket
-                    print(f"📤 Enviando mensaje por WebSocket")
+                    print(f"📤 Enviando mensaje por WebSocket con leido_por={total_lecturas}")
                     await manager.broadcast(grupo_id, out)
 
                     # 6️⃣ Actualizar contadores y preparar FCM
