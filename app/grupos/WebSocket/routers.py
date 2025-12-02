@@ -821,6 +821,19 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
 
 @router.websocket("/ws/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
+    print("🔔 ════════════════════════════════════════")
+    print("🔔 WEBSOCKET REQUEST RECIBIDO")
+    print(f"🔔 Headers: {dict(websocket.headers)}")
+    print(f"🔔 Query params: {dict(websocket.query_params)}")
+    print("🔔 ════════════════════════════════════════")
+    
+    # 🔥 ACEPTA INMEDIATAMENTE
+    try:
+        await websocket.accept()
+        print("✅ WebSocket aceptado correctamente")
+    except Exception as e:
+        print(f"❌ Error al aceptar WebSocket: {e}")
+        return
     """
     WebSocket para recibir notificaciones globales de grupos
     (mensajes no leídos, nuevos grupos, etc.)
@@ -1155,3 +1168,19 @@ def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
         print(f"📢 Notificación programada: mensaje {mensaje_id} con {leido_por} lecturas")
     except Exception as e:
         print(f"⚠️ Error al notificar mensaje leído: {e}")
+
+
+@router.websocket("/ws/ping")
+async def websocket_ping(websocket: WebSocket):
+    """Endpoint de prueba sin autenticación"""
+    print("🏓 PING WebSocket alcanzado")
+    await websocket.accept()
+    await websocket.send_text(json.dumps({"message": "pong"}))
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"Recibido: {data}")
+            await websocket.send_text(json.dumps({"echo": data}))
+    except WebSocketDisconnect:
+        print("🏓 PING WebSocket cerrado")
