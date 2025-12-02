@@ -89,7 +89,7 @@ async def enviar_fcm_en_background(
         except Exception as e:
             print(f"⚠️ Error cerrando sesión FCM: {e}")
 
-@router.websocket("/ws/{grupo_id}")
+@router.websocket("/{grupo_id}")
 async def websocket_grupo(websocket: WebSocket, grupo_id: int):
     await websocket.accept()
     print("🔹 WebSocket aceptado, iniciando validaciones...")
@@ -541,7 +541,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
         
         print(f"🔹 Usuario {user_id if user_id else 'desconocido'} desconectado del grupo {grupo_id}")
 
-@router.websocket("/ws/{grupo_id}/ubicaciones")
+@router.websocket("/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
     # ✅ ACEPTAR PRIMERO (igual que el chat)
     await websocket.accept()
@@ -818,7 +818,7 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
         
         print(f"📍 Limpieza completada para usuario {user_id if user_id else 'desconocido'}")
 
-@router.websocket("/ws/notificaciones")
+@router.websocket("/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
     """
     WebSocket para recibir notificaciones globales de grupos
@@ -1162,7 +1162,7 @@ def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
         print(f"⚠️ Error al notificar mensaje leído: {e}")
 
 
-@router.websocket("/ws/ping")
+@router.websocket("/ping")
 async def websocket_ping(websocket: WebSocket):
     """Endpoint de prueba sin autenticación"""
     print("🏓 PING WebSocket alcanzado")
