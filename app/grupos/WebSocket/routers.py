@@ -175,34 +175,6 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
             websocket.usuario_id = user_id  # ✅ USAR user_id
 
-            # ═══════════════════════════════════════════════════════════
-            # 🆕 NOTIFICAR MENSAJES "ENTREGADOS" (aunque ya estén leídos)
-            # ═══════════════════════════════════════════════════════════
-            # Obtener TODOS los mensajes del grupo que NO son míos
-            mensajes_otros = db.query(Mensaje).filter(
-                Mensaje.grupo_id == grupo_id,
-                Mensaje.remitente_id != user_id
-            ).all()
-
-            if mensajes_otros:
-                print(f"📬 Notificando entrega de {len(mensajes_otros)} mensajes")
-                for mensaje in mensajes_otros:
-                    # Calcular total de lecturas (excluyendo al remitente)
-                    total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
-                        LecturaMensaje.mensaje_id == mensaje.id,
-                        LecturaMensaje.usuario_id != mensaje.remitente_id
-                    ).scalar() or 0
-                    
-                    # Notificar entrega
-                    await manager.broadcast(grupo_id, {
-                        "type": "mensaje_leido",
-                        "data": {
-                            "mensaje_id": mensaje.id,
-                            "leido_por": total_lecturas
-                        }
-                    })
-                    print(f"📬 Mensaje {mensaje.id} entregado (leido_por={total_lecturas})")
-
             # Marcar mensajes como leídos al conectar
             mensajes_no_leidos = db.query(Mensaje).outerjoin(
                 LecturaMensaje,
