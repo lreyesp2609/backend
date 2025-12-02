@@ -946,10 +946,35 @@ def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
     """
     Notifica de forma síncrona que un mensaje fue leído
     """
-    asyncio.create_task(manager.broadcast(grupo_id, {
-        "type": "mensaje_leido",
-        "data": {
-            "mensaje_id": mensaje_id,
-            "leido_por": leido_por
-        }
-    }))
+    import asyncio
+    
+    try:
+        # Obtener el event loop actual si existe
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No hay loop, crear uno temporal
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            # Ejecutar y cerrar
+            loop.run_until_complete(manager.broadcast(grupo_id, {
+                "type": "mensaje_leido",
+                "data": {
+                    "mensaje_id": mensaje_id,
+                    "leido_por": leido_por
+                }
+            }))
+            loop.close()
+            return
+        
+        # Si hay loop corriendo, usar create_task
+        asyncio.create_task(manager.broadcast(grupo_id, {
+            "type": "mensaje_leido",
+            "data": {
+                "mensaje_id": mensaje_id,
+                "leido_por": leido_por
+            }
+        }))
+        print(f"📢 Notificación programada: mensaje {mensaje_id} con {leido_por} lecturas")
+    except Exception as e:
+        print(f"⚠️ Error al notificar mensaje leído: {e}")
