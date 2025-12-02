@@ -6,7 +6,7 @@ import asyncio
 import traceback
 from datetime import datetime, timezone, timedelta
 from jose import jwt, JWTError
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 from ...database.database import SessionLocal
 from ..models import Grupo, MiembroGrupo, Mensaje, LecturaMensaje
 from ...usuarios.models import Usuario
@@ -854,8 +854,61 @@ async def websocket_notificaciones(websocket: WebSocket):
             user = await get_current_user_ws(websocket, db)
             print(f"🔔 Usuario {user.id} autenticado para notificaciones")
             
+            # 🆕 ════════════════════════════════════════════════════════
+            # 🆕 MARCAR MENSAJES COMO ENTREGADOS AL CONECTAR
+            # 🆕 ════════════════════════════════════════════════════════
+            print(f"🔔 Verificando mensajes no entregados para usuario {user.id}...")
+            
+            # Obtener todos los grupos donde el usuario es miembro
+            grupos_usuario = db.query(Grupo).outerjoin(
+                MiembroGrupo,
+                and_(
+                    MiembroGrupo.grupo_id == Grupo.id,
+                    MiembroGrupo.usuario_id == user.id,
+                    MiembroGrupo.activo == True
+                )
+            ).filter(
+                Grupo.is_deleted == False,
+                or_(
+                    Grupo.creado_por_id == user.id,
+                    MiembroGrupo.id != None
+                )
+            ).all()
+            
+            print(f"🔔 Usuario pertenece a {len(grupos_usuario)} grupos")
+            
+            # Para cada grupo, buscar mensajes no entregados
+            mensajes_entregados_por_grupo = {}
+            total_mensajes_marcados = 0
+            
+            for grupo in grupos_usuario:
+                # Buscar mensajes no entregados que NO sean del usuario
+                mensajes_no_entregados = db.query(Mensaje).filter(
+                    Mensaje.grupo_id == grupo.id,
+                    Mensaje.remitente_id != user.id,
+                    Mensaje.entregado_at == None
+                ).all()
+                
+                if mensajes_no_entregados:
+                    print(f"📦 Grupo {grupo.id} ({grupo.nombre}): {len(mensajes_no_entregados)} mensajes sin entregar")
+                    
+                    # Marcar como entregados
+                    for mensaje in mensajes_no_entregados:
+                        mensaje.entregado_at = datetime.now(timezone.utc)
+                        total_mensajes_marcados += 1
+                    
+                    db.commit()
+                    
+                    # Guardar IDs para notificar después (fuera de la DB)
+                    mensajes_entregados_por_grupo[grupo.id] = [m.id for m in mensajes_no_entregados]
+            
+            if total_mensajes_marcados > 0:
+                print(f"✅ Total de mensajes marcados como entregados: {total_mensajes_marcados}")
+            else:
+                print(f"ℹ️ No hay mensajes pendientes de entrega")
+            
         finally:
-            db.close()  # ← CERRAR DB después de autenticación
+            db.close()
             print("🔒 Sesión DB cerrada después de autenticación (notificaciones)")
         
         # ═══════════════════════════════════════════════════════
@@ -863,10 +916,29 @@ async def websocket_notificaciones(websocket: WebSocket):
         # ═══════════════════════════════════════════════════════
         await grupo_notification_manager.connect_user(user.id, websocket)
         
+        # 🆕 ════════════════════════════════════════════════════════
+        # 🆕 NOTIFICAR ENTREGAS A LOS REMITENTES (sin DB)
+        # 🆕 ════════════════════════════════════════════════════════
+        if mensajes_entregados_por_grupo:
+            print(f"📤 Enviando notificaciones de entrega a remitentes...")
+            
+            for grupo_id, mensaje_ids in mensajes_entregados_por_grupo.items():
+                for mensaje_id in mensaje_ids:
+                    # Broadcast sin esperar (fire and forget)
+                    asyncio.create_task(manager.broadcast(grupo_id, {
+                        "type": "mensaje_entregado",
+                        "data": {
+                            "mensaje_id": mensaje_id,
+                            "entregado": True
+                        }
+                    }))
+                    print(f"📬 Notificación de entrega programada para mensaje {mensaje_id}")
+            
+            print(f"✅ {len(sum(mensajes_entregados_por_grupo.values(), []))} notificaciones programadas")
+        
         # ═══════════════════════════════════════════════════════
         # 3️⃣ ENVIAR ESTADO INICIAL (abre/cierra DB temporal)
         # ═══════════════════════════════════════════════════════
-        # El manager abrirá/cerrará DB automáticamente si no se pasa db
         await grupo_notification_manager.notify_unread_count_changed(user.id)
         
         # ═══════════════════════════════════════════════════════
@@ -992,7 +1064,6 @@ async def websocket_notificaciones(websocket: WebSocket):
         if user:
             await grupo_notification_manager.disconnect_user(user.id)
         
-        # ← NO HAY db.close() aquí porque ya no tenemos sesión abierta
         print(f"🔔 Limpieza completada para usuario {user.id if user else 'desconocido'}")
 
 def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
