@@ -46,3 +46,18 @@ class GrupoConNoLeidos(BaseModel):
     
     class Config:
         from_attributes = True
+
+class MensajeOut(BaseModel):
+    id: int
+    remitente_id: int
+    remitente_nombre: str
+    grupo_id: int
+    contenido: str
+    tipo: str
+    fecha_creacion: datetime
+    entregado: bool
+    leido: bool
+    leido_por: int
+
+    class Config:
+        from_attributes = True

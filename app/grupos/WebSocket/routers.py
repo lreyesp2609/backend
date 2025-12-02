@@ -187,6 +187,29 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 Mensaje.remitente_id != user_id,  # ✅ USAR user_id
                 LecturaMensaje.id == None
             ).all()
+
+            mensajes_no_entregados = db.query(Mensaje).filter(
+                Mensaje.grupo_id == grupo_id,
+                Mensaje.remitente_id != user_id,
+                Mensaje.entregado_at == None
+            ).all()
+
+            if mensajes_no_entregados:
+                print(f"📦 Marcando {len(mensajes_no_entregados)} mensajes como entregados")
+                for mensaje in mensajes_no_entregados:
+                    mensaje.entregado_at = datetime.now(timezone.utc)
+                db.commit()
+                
+                # Notificar al remitente que sus mensajes fueron entregados
+                for mensaje in mensajes_no_entregados:
+                    await manager.broadcast(grupo_id, {
+                        "type": "mensaje_entregado",
+                        "data": {
+                            "mensaje_id": mensaje.id,
+                            "entregado": True
+                        }
+                    })
+                    print(f"📬 Mensaje {mensaje.id} marcado como entregado")
             
             # Marcar mensajes como leídos al conectar
             if mensajes_no_leidos:
@@ -341,7 +364,8 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         grupo_id=grupo_id,
                         contenido=contenido,
                         tipo=tipo,
-                        fecha_creacion=datetime.now(timezone.utc)
+                        fecha_creacion=datetime.now(timezone.utc),
+                        entregado_at=None  # 🆕 INICIAMOS SIN ENTREGAR
                     )
                     db.add(mensaje)
                     db.commit()
@@ -357,40 +381,55 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     db.commit()
                     print(f"✅ Mensaje {mensaje.id} guardado")
 
-                    # 3️⃣ Obtener miembros del grupo
+                    # 3️⃣ Obtener miembros del grupo (MOVIDO AQUÍ ANTES)
                     grupo = db.query(Grupo).filter(Grupo.id == grupo_id).first()
                     miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
                     miembros_ids = [m.usuario_id for m in miembros]
                     if grupo.creado_por_id not in miembros_ids:
                         miembros_ids.append(grupo.creado_por_id)
 
-                    # 4️⃣ Calcular lecturas reales (excluyendo al remitente)
+                    # 4️⃣ Verificar si hay usuarios conectados
+                    hay_usuarios_conectados = False
+                    for miembro_id in miembros_ids:
+                        if miembro_id != user_id:
+                            if manager.is_user_connected_to_group(grupo_id, miembro_id):
+                                hay_usuarios_conectados = True
+                                break
+
+                    # 5️⃣ Si hay usuarios conectados, marcar como entregado inmediatamente
+                    if hay_usuarios_conectados:
+                        mensaje.entregado_at = datetime.now(timezone.utc)
+                        db.commit()
+                        print(f"📬 Mensaje {mensaje.id} entregado inmediatamente (hay usuarios conectados)")
+
+                    # 6️⃣ Calcular lecturas reales (excluyendo al remitente)
                     total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
                         LecturaMensaje.mensaje_id == mensaje.id,
-                        LecturaMensaje.usuario_id != mensaje.remitente_id  # 🔥 Excluir remitente
+                        LecturaMensaje.usuario_id != mensaje.remitente_id
                     ).scalar() or 0
 
-                    # Preparar mensaje para WebSocket
+                    # 7️⃣ Preparar mensaje para WebSocket
                     out = {
                         "type": "mensaje",
                         "data": {
                             "id": mensaje.id,
                             "remitente_id": mensaje.remitente_id,
-                            "remitente_nombre": user_nombre_completo,  # 🆕 Agregar nombre
+                            "remitente_nombre": user_nombre_completo,
                             "grupo_id": mensaje.grupo_id,
                             "contenido": mensaje.contenido,
                             "tipo": mensaje.tipo,
                             "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                            "leido": False,  # 🔥 Siempre False para mensajes nuevos
-                            "leido_por": total_lecturas  # 🔥 Conteo real sin el remitente
+                            "entregado": bool(mensaje.entregado_at),  # 🆕 AGREGAMOS ESTADO ENTREGADO
+                            "leido": False,
+                            "leido_por": total_lecturas
                         }
                     }
 
-                    # 5️⃣ ENVIAR por WebSocket
-                    print(f"📤 Enviando mensaje por WebSocket con leido_por={total_lecturas}")
+                    # 8️⃣ ENVIAR por WebSocket
+                    print(f"📤 Enviando mensaje por WebSocket - entregado={bool(mensaje.entregado_at)}, leido_por={total_lecturas}")
                     await manager.broadcast(grupo_id, out)
 
-                    # 6️⃣ Actualizar contadores y preparar FCM
+                    # 9️⃣ Actualizar contadores y preparar FCM
                     tokens_para_fcm = []
                     
                     for miembro_id in miembros_ids:
@@ -425,23 +464,23 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                                 tokens_para_fcm.extend([t.token for t in tokens_usuario])
                                 print(f"📱 Usuario {miembro_id}: {mensajes_no_leidos} no leídos")
 
-                    # 7️⃣ Preparar datos para FCM ANTES de cerrar DB
+                    # 🔟 Preparar datos para FCM ANTES de cerrar DB
                     fcm_data = None
                     if tokens_para_fcm:
                         fcm_data = {
                             'tokens': tokens_para_fcm,
                             'grupo_id': grupo_id,
                             'grupo_nombre': grupo.nombre,
-                            'remitente_nombre': user_nombre_completo,  # ✅ USAR variable
+                            'remitente_nombre': user_nombre_completo,
                             'mensaje': contenido,
                             'timestamp': int(mensaje.fecha_creacion.timestamp() * 1000)
                         }
 
                 finally:
-                    db.close()  # ← CERRAR DB después de procesar mensaje
+                    db.close()
                     print("🔒 Sesión DB cerrada después de procesar mensaje")
 
-                # 8️⃣ Lanzar FCM en background (DESPUÉS de cerrar DB)
+                # 1️⃣1️⃣ Lanzar FCM en background (DESPUÉS de cerrar DB)
                 if fcm_data:
                     asyncio.create_task(enviar_fcm_en_background(
                         tokens=fcm_data['tokens'],
@@ -450,7 +489,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         remitente_nombre=fcm_data['remitente_nombre'],
                         mensaje=fcm_data['mensaje'],
                         timestamp=fcm_data['timestamp'],
-                        db_session=SessionLocal()  # ✅ Nueva sesión independiente
+                        db_session=SessionLocal()
                     ))
                     print(f"🚀 FCM programado para {len(fcm_data['tokens'])} dispositivos")
 

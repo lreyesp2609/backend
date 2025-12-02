@@ -36,8 +36,9 @@ class Mensaje(Base):
     remitente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     grupo_id = Column(Integer, ForeignKey("grupos.id"), nullable=False)
     contenido = Column(Text, nullable=False)
-    tipo = Column(String(20), default="texto")  # texto, imagen, system, etc.
+    tipo = Column(String(20), default="texto")
     fecha_creacion = Column(DateTime, default=datetime.utcnow)
+    entregado_at = Column(DateTime, nullable=True)
 
     remitente = relationship("Usuario")
     grupo = relationship("Grupo")

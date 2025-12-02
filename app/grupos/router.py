@@ -125,7 +125,6 @@ def obtener_mensajes_grupo(
             func.sum(
                 case((LecturaMensaje.usuario_id == current_user.id, 1), else_=0)
             ).label("leido_por_mi"),
-            # 🔥 CAMBIO: solo contar lecturas de usuarios que NO son el remitente
             func.count(
                 case((LecturaMensaje.usuario_id != Mensaje.remitente_id, LecturaMensaje.id), else_=None)
             ).label("total_lecturas"),
@@ -142,7 +141,6 @@ def obtener_mensajes_grupo(
         .all()
     )
     
-    # 🧩 Construir respuesta
     resultado = []
     for mensaje, leido_por_mi, total_lecturas, nombre, apellido in reversed(mensajes):
         resultado.append(
@@ -154,8 +152,9 @@ def obtener_mensajes_grupo(
                 contenido=mensaje.contenido,
                 tipo=mensaje.tipo,
                 fecha_creacion=mensaje.fecha_creacion,
+                entregado=bool(mensaje.entregado_at),  # 🆕 NUEVO
                 leido=bool(leido_por_mi > 0),
-                leido_por=total_lecturas or 0  # Ahora solo cuenta lecturas de OTROS
+                leido_por=total_lecturas or 0
             )
         )
 
