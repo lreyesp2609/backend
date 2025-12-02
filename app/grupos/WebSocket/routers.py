@@ -822,6 +822,7 @@ async def websocket_notificaciones(websocket: WebSocket):
     WebSocket para recibir notificaciones globales de grupos
     (mensajes no leídos, nuevos grupos, etc.)
     """
+    # 🔥 CRÍTICO: ACCEPT PRIMERO, ANTES DE CUALQUIER VALIDACIÓN
     await websocket.accept()
     print("🔔 WebSocket de notificaciones aceptado")
     
@@ -843,6 +844,7 @@ async def websocket_notificaciones(websocket: WebSocket):
                 current_token = websocket.query_params.get("token")
             
             if not current_token:
+                print("❌ Token no proporcionado")
                 await websocket.send_text(json.dumps({
                     "type": "error",
                     "message": "Token no proporcionado"
@@ -850,9 +852,56 @@ async def websocket_notificaciones(websocket: WebSocket):
                 await websocket.close(code=1008)
                 return
             
-            # Autenticar
-            user = await get_current_user_ws(websocket, db)
-            print(f"🔔 Usuario {user.id} autenticado para notificaciones")
+            # 🔥 USAR TRY-CATCH PARA MANEJAR ERRORES DE AUTENTICACIÓN
+            try:
+                # Validar token manualmente (sin usar get_current_user_ws)
+                payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
+                usuario_id = payload.get("id_usuario")
+                
+                if usuario_id is None:
+                    raise Exception("Token inválido: falta id_usuario")
+                
+                # Buscar usuario
+                user = db.query(Usuario).options(
+                    joinedload(Usuario.datos_personales)
+                ).filter(
+                    Usuario.id == usuario_id,
+                    Usuario.activo == True
+                ).first()
+                
+                if not user:
+                    raise Exception("Usuario no encontrado o inactivo")
+                
+                print(f"🔔 Usuario {user.id} autenticado para notificaciones")
+                
+            except ExpiredSignatureError:
+                print(f"❌ Token expirado")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "code": "TOKEN_EXPIRED",
+                    "message": "Token expirado"
+                }))
+                await websocket.close(code=1008)
+                return
+                
+            except JWTError as e:
+                print(f"❌ Token inválido: {e}")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "code": "TOKEN_INVALID",
+                    "message": f"Token inválido: {str(e)}"
+                }))
+                await websocket.close(code=1008)
+                return
+            
+            except Exception as e:
+                print(f"❌ Error de autenticación: {e}")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": str(e)
+                }))
+                await websocket.close(code=1008)
+                return
             
             # 🆕 ════════════════════════════════════════════════════════
             # 🆕 MARCAR MENSAJES COMO ENTREGADOS AL CONECTAR
