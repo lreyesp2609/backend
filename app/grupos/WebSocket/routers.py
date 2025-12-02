@@ -821,26 +821,19 @@ async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):
 
 @router.websocket("/ws/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
+    """
+    WebSocket para recibir notificaciones globales de grupos
+    """
+    # 🔍 LOGS DE DEPURACIÓN (antes de accept)
     print("🔔 ════════════════════════════════════════")
     print("🔔 WEBSOCKET REQUEST RECIBIDO")
     print(f"🔔 Headers: {dict(websocket.headers)}")
     print(f"🔔 Query params: {dict(websocket.query_params)}")
     print("🔔 ════════════════════════════════════════")
     
-    # 🔥 ACEPTA INMEDIATAMENTE
-    try:
-        await websocket.accept()
-        print("✅ WebSocket aceptado correctamente")
-    except Exception as e:
-        print(f"❌ Error al aceptar WebSocket: {e}")
-        return
-    """
-    WebSocket para recibir notificaciones globales de grupos
-    (mensajes no leídos, nuevos grupos, etc.)
-    """
-    # 🔥 CRÍTICO: ACCEPT PRIMERO, ANTES DE CUALQUIER VALIDACIÓN
+    # 🔥 ACCEPT UNA SOLA VEZ
     await websocket.accept()
-    print("🔔 WebSocket de notificaciones aceptado")
+    print("✅ WebSocket aceptado correctamente")
     
     user = None
     current_token = None
