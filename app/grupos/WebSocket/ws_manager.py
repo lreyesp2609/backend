@@ -49,13 +49,16 @@ class WebSocketManager:
             user_id in self.active_connections[grupo_id]
         )
 
-    async def broadcast(self, grupo_id: int, message: dict, exclude_user_id: int | None = None):
+    async def broadcast(self, grupo_id: int, message: dict, exclude_user_id: int | None = None) -> bool:
         """
         ✅ ACTUALIZADO: Ahora excluye por user_id en lugar de WebSocket
+        
+        Returns:
+            bool: True si al menos un mensaje fue entregado exitosamente
         """
         if grupo_id not in self.active_connections:
             print(f"⚠️ Grupo {grupo_id} no tiene conexiones activas")
-            return
+            return False  # 🆕 RETORNAR False si no hay conexiones
         
         # ✅ CRÍTICO: Copiar snapshot FUERA del lock para evitar bloqueos
         connections_snapshot = {}
@@ -75,11 +78,11 @@ class WebSocketManager:
                 connections_snapshot = dict(grupo_connections)
             else:
                 print(f"❌ ERROR: Conexiones del grupo {grupo_id} en formato desconocido: {type(grupo_connections)}")
-                return
+                return False  # 🆕 RETORNAR False si hay error
         
         if not connections_snapshot:
             print(f"⚠️ No hay usuarios conectados al grupo {grupo_id} para broadcast")
-            return
+            return False  # 🆕 RETORNAR False si no hay usuarios
         
         print(f"📤 Broadcasting a {len(connections_snapshot)} usuarios en grupo {grupo_id}")
         if exclude_user_id:
@@ -206,9 +209,6 @@ class UbicacionManager:
     def get_ubicaciones_grupo(self, grupo_id: int) -> dict:
         """Obtiene todas las ubicaciones activas de un grupo"""
         return self.ubicaciones.get(grupo_id, {})
-    
-
-    
 
 ubicacion_manager = UbicacionManager()
 

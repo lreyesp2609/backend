@@ -348,14 +348,13 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                             "message": "Token inválido proporcionado"
                         }))
                 continue
-
+            
             if action == "mensaje":
                 contenido = data.get("contenido", "").strip()
                 tipo = data.get("tipo", "texto")
                 if not contenido:
                     continue
 
-                # 🔥 Abrir DB SOLO para esta operación
                 db = SessionLocal()
                 try:
                     # 1️⃣ Guardar mensaje en BD
@@ -381,7 +380,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                     db.commit()
                     print(f"✅ Mensaje {mensaje.id} guardado")
 
-                    # 3️⃣ Obtener miembros del grupo (MOVIDO AQUÍ ANTES)
+                    # 3️⃣ Obtener miembros del grupo
                     grupo = db.query(Grupo).filter(Grupo.id == grupo_id).first()
                     miembros = db.query(MiembroGrupo).filter_by(grupo_id=grupo_id, activo=True).all()
                     miembros_ids = [m.usuario_id for m in miembros]
@@ -419,7 +418,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                             "contenido": mensaje.contenido,
                             "tipo": mensaje.tipo,
                             "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                            "entregado": bool(mensaje.entregado_at),  # 🆕 AGREGAMOS ESTADO ENTREGADO
+                            "entregado": bool(mensaje.entregado_at),  # 🆕 ESTADO CORRECTO
                             "leido": False,
                             "leido_por": total_lecturas
                         }
@@ -427,24 +426,39 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
                     # 8️⃣ ENVIAR por WebSocket
                     print(f"📤 Enviando mensaje por WebSocket - entregado={bool(mensaje.entregado_at)}, leido_por={total_lecturas}")
-                    await manager.broadcast(grupo_id, out)
+                    
+                    # 🔥 BROADCAST (esto enviará el mensaje a todos los conectados)
+                    enviado_exitosamente = await manager.broadcast(grupo_id, out)
+                    
+                    # 🔥 CRÍTICO: Si se entregó exitosamente pero aún no está marcado como entregado en BD
+                    if enviado_exitosamente and not mensaje.entregado_at:
+                        mensaje.entregado_at = datetime.now(timezone.utc)
+                        db.commit()
+                        db.refresh(mensaje)
+                        print(f"📬 Mensaje {mensaje.id} marcado como entregado después del broadcast exitoso")
+                        
+                        # Notificar al remitente que el mensaje fue entregado
+                        await manager.broadcast(grupo_id, {
+                            "type": "mensaje_entregado",
+                            "data": {
+                                "mensaje_id": mensaje.id,
+                                "entregado": True
+                            }
+                        })
+                        print(f"📢 Notificación de entrega enviada para mensaje {mensaje.id}")
 
                     # 9️⃣ Actualizar contadores y preparar FCM
                     tokens_para_fcm = []
                     
                     for miembro_id in miembros_ids:
                         if miembro_id != user_id:
-                            # Actualizar contador
                             await grupo_notification_manager.notify_unread_count_changed(miembro_id, db)
-                            
-                            # Verificar si está conectado
                             esta_conectado = manager.is_user_connected_to_group(grupo_id, miembro_id)
                             
                             if esta_conectado:
                                 print(f"ℹ️ Usuario {miembro_id} conectado, no FCM")
                                 continue
                             
-                            # Contar no leídos
                             mensajes_no_leidos = db.query(func.count(Mensaje.id)).outerjoin(
                                 LecturaMensaje, 
                                 and_(
