@@ -39,28 +39,15 @@ async def websocket_ping(websocket: WebSocket):
 
 @router.websocket("/notificaciones")
 async def websocket_notificaciones(websocket: WebSocket):
-    """
-    WebSocket para recibir notificaciones globales de grupos
-    """
-    # 🔍 LOGS DE DEPURACIÓN (antes de accept)
-    print("🔔 ════════════════════════════════════════")
-    print("🔔 WEBSOCKET REQUEST RECIBIDO")
-    print(f"🔔 Headers: {dict(websocket.headers)}")
-    print(f"🔔 Query params: {dict(websocket.query_params)}")
-    print("🔔 ════════════════════════════════════════")
-    
-    # 🔥 ACCEPT UNA SOLA VEZ
     await websocket.accept()
     print("✅ WebSocket aceptado correctamente")
     
     user = None
+    user_id = None  # ✅ AGREGAR ESTA VARIABLE
     current_token = None
     revalidation_task = None
     
     try:
-        # ═══════════════════════════════════════════════════════
-        # 1️⃣ AUTENTICACIÓN (abre DB, valida, cierra)
-        # ═══════════════════════════════════════════════════════
         db = SessionLocal()
         try:
             # Extraer token
@@ -79,16 +66,13 @@ async def websocket_notificaciones(websocket: WebSocket):
                 await websocket.close(code=1008)
                 return
             
-            # 🔥 USAR TRY-CATCH PARA MANEJAR ERRORES DE AUTENTICACIÓN
             try:
-                # Validar token manualmente (sin usar get_current_user_ws)
                 payload = jwt.decode(current_token, SECRET_KEY, algorithms=[ALGORITHM])
                 usuario_id = payload.get("id_usuario")
                 
                 if usuario_id is None:
                     raise Exception("Token inválido: falta id_usuario")
                 
-                # Buscar usuario
                 user = db.query(Usuario).options(
                     joinedload(Usuario.datos_personales)
                 ).filter(
@@ -99,7 +83,9 @@ async def websocket_notificaciones(websocket: WebSocket):
                 if not user:
                     raise Exception("Usuario no encontrado o inactivo")
                 
-                print(f"🔔 Usuario {user.id} autenticado para notificaciones")
+                # ✅ GUARDAR user_id ANTES DE CERRAR LA SESIÓN
+                user_id = user.id
+                print(f"🔔 Usuario {user_id} autenticado para notificaciones")
                 
             except ExpiredSignatureError:
                 print(f"❌ Token expirado")
@@ -130,52 +116,44 @@ async def websocket_notificaciones(websocket: WebSocket):
                 await websocket.close(code=1008)
                 return
             
-            # 🆕 ════════════════════════════════════════════════════════
-            # 🆕 MARCAR MENSAJES COMO ENTREGADOS AL CONECTAR
-            # 🆕 ════════════════════════════════════════════════════════
-            print(f"🔔 Verificando mensajes no entregados para usuario {user.id}...")
+            # Marcar mensajes como entregados
+            print(f"🔔 Verificando mensajes no entregados para usuario {user_id}...")  # ✅ Usar user_id
             
-            # Obtener todos los grupos donde el usuario es miembro
             grupos_usuario = db.query(Grupo).outerjoin(
                 MiembroGrupo,
                 and_(
                     MiembroGrupo.grupo_id == Grupo.id,
-                    MiembroGrupo.usuario_id == user.id,
+                    MiembroGrupo.usuario_id == user_id,  # ✅ Usar user_id
                     MiembroGrupo.activo == True
                 )
             ).filter(
                 Grupo.is_deleted == False,
                 or_(
-                    Grupo.creado_por_id == user.id,
+                    Grupo.creado_por_id == user_id,  # ✅ Usar user_id
                     MiembroGrupo.id != None
                 )
             ).all()
             
             print(f"🔔 Usuario pertenece a {len(grupos_usuario)} grupos")
             
-            # Para cada grupo, buscar mensajes no entregados
             mensajes_entregados_por_grupo = {}
             total_mensajes_marcados = 0
             
             for grupo in grupos_usuario:
-                # Buscar mensajes no entregados que NO sean del usuario
                 mensajes_no_entregados = db.query(Mensaje).filter(
                     Mensaje.grupo_id == grupo.id,
-                    Mensaje.remitente_id != user.id,
+                    Mensaje.remitente_id != user_id,  # ✅ Usar user_id
                     Mensaje.entregado_at == None
                 ).all()
                 
                 if mensajes_no_entregados:
                     print(f"📦 Grupo {grupo.id} ({grupo.nombre}): {len(mensajes_no_entregados)} mensajes sin entregar")
                     
-                    # Marcar como entregados
                     for mensaje in mensajes_no_entregados:
                         mensaje.entregado_at = datetime.now(timezone.utc)
                         total_mensajes_marcados += 1
                     
                     db.commit()
-                    
-                    # Guardar IDs para notificar después (fuera de la DB)
                     mensajes_entregados_por_grupo[grupo.id] = [m.id for m in mensajes_no_entregados]
             
             if total_mensajes_marcados > 0:
@@ -187,20 +165,14 @@ async def websocket_notificaciones(websocket: WebSocket):
             db.close()
             print("🔒 Sesión DB cerrada después de autenticación (notificaciones)")
         
-        # ═══════════════════════════════════════════════════════
-        # 2️⃣ CONECTAR AL MANAGER (sin DB)
-        # ═══════════════════════════════════════════════════════
-        await grupo_notification_manager.connect_user(user.id, websocket)
+        # ✅ AHORA SÍ PUEDES USAR user_id (es un primitivo, no un objeto SQLAlchemy)
+        await grupo_notification_manager.connect_user(user_id, websocket)  # ✅ Usar user_id
         
-        # 🆕 ════════════════════════════════════════════════════════
-        # 🆕 NOTIFICAR ENTREGAS A LOS REMITENTES (sin DB)
-        # 🆕 ════════════════════════════════════════════════════════
         if mensajes_entregados_por_grupo:
             print(f"📤 Enviando notificaciones de entrega a remitentes...")
             
             for grupo_id, mensaje_ids in mensajes_entregados_por_grupo.items():
                 for mensaje_id in mensaje_ids:
-                    # Broadcast sin esperar (fire and forget)
                     asyncio.create_task(manager.broadcast(grupo_id, {
                         "type": "mensaje_entregado",
                         "data": {
@@ -212,16 +184,9 @@ async def websocket_notificaciones(websocket: WebSocket):
             
             print(f"✅ {len(sum(mensajes_entregados_por_grupo.values(), []))} notificaciones programadas")
         
-        # ═══════════════════════════════════════════════════════
-        # 3️⃣ ENVIAR ESTADO INICIAL (abre/cierra DB temporal)
-        # ═══════════════════════════════════════════════════════
-        await grupo_notification_manager.notify_unread_count_changed(user.id)
+        await grupo_notification_manager.notify_unread_count_changed(user_id)  # ✅ Usar user_id
         
-        # ═══════════════════════════════════════════════════════
-        # 4️⃣ TAREA DE REVALIDACIÓN (sin DB)
-        # ═══════════════════════════════════════════════════════
         async def revalidate_token():
-            """Revalida el token cada 60 segundos y muestra el tiempo de expiración"""
             contador_checks = 0
             ultimo_tiempo_reportado = None
             
@@ -239,7 +204,6 @@ async def websocket_notificaciones(websocket: WebSocket):
                             tiempo_restante = exp_timestamp - ahora
                             minutos_restantes = tiempo_restante / 60
                             
-                            # Solo loguear si hay cambios significativos o cada 5 checks
                             debe_loguear = (
                                 ultimo_tiempo_reportado is None or
                                 abs(minutos_restantes - ultimo_tiempo_reportado) > 0.5 or
@@ -251,12 +215,9 @@ async def websocket_notificaciones(websocket: WebSocket):
                                 print(f"🔔⏱️ Token notificaciones - Check #{contador_checks}: {minutos_restantes:.1f} min restantes")
                                 ultimo_tiempo_reportado = minutos_restantes
                             
-                            # Si expiró
                             if tiempo_restante <= 0:
-                                print(f"🔔❌ ════════════════════════════════════════")
                                 print(f"🔔❌ TOKEN EXPIRADO hace {abs(minutos_restantes):.1f} minutos")
-                                print(f"🔔❌ Usuario: {user.id if user else 'desconocido'}")
-                                print(f"🔔❌ ════════════════════════════════════════")
+                                print(f"🔔❌ Usuario: {user_id if user_id else 'desconocido'}")  # ✅ Usar user_id
                                 await websocket.send_text(json.dumps({
                                     "type": "error",
                                     "code": "TOKEN_EXPIRED",
@@ -265,12 +226,8 @@ async def websocket_notificaciones(websocket: WebSocket):
                                 await websocket.close(code=1008)
                                 break
                             
-                            # Si está por expirar (menos de 2 minutos)
                             if tiempo_restante < 120:
-                                print(f"🔔⚠️ ════════════════════════════════════════")
                                 print(f"🔔⚠️ TOKEN POR EXPIRAR: {minutos_restantes:.1f} min")
-                                print(f"🔔⚠️ Se recomienda renovar")
-                                print(f"🔔⚠️ ════════════════════════════════════════")
                                 await websocket.send_text(json.dumps({
                                     "type": "warning",
                                     "code": "TOKEN_EXPIRING_SOON",
@@ -279,11 +236,9 @@ async def websocket_notificaciones(websocket: WebSocket):
                                 }))
                         
                 except JWTError as e:
-                    print(f"🔔❌ ════════════════════════════════════════")
                     print(f"🔔❌ TOKEN INVÁLIDO O EXPIRADO")
-                    print(f"🔔❌ Usuario: {user.id if user else 'desconocido'}")
+                    print(f"🔔❌ Usuario: {user_id if user_id else 'desconocido'}")  # ✅ Usar user_id
                     print(f"🔔❌ Error: {e}")
-                    print(f"🔔❌ ════════════════════════════════════════")
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "code": "TOKEN_EXPIRED",
@@ -297,9 +252,6 @@ async def websocket_notificaciones(websocket: WebSocket):
         
         revalidation_task = asyncio.create_task(revalidate_token())
         
-        # ═══════════════════════════════════════════════════════
-        # 5️⃣ LOOP PRINCIPAL (sin DB abierta permanentemente)
-        # ═══════════════════════════════════════════════════════
         while True:
             raw = await websocket.receive_text()
             payload = json.loads(raw)
@@ -313,7 +265,7 @@ async def websocket_notificaciones(websocket: WebSocket):
                     try:
                         jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
                         current_token = new_token
-                        print(f"🔔🔄 Token de notificaciones actualizado para usuario {user.id}")
+                        print(f"🔔🔄 Token de notificaciones actualizado para usuario {user_id}")  # ✅ Usar user_id
                         await websocket.send_text(json.dumps({
                             "type": "token_refreshed",
                             "message": "Token actualizado correctamente"
@@ -325,7 +277,7 @@ async def websocket_notificaciones(websocket: WebSocket):
                         }))
     
     except WebSocketDisconnect:
-        print(f"🔔 WebSocket notificaciones desconectado para usuario {user.id if user else 'desconocido'}")
+        print(f"🔔 WebSocket notificaciones desconectado para usuario {user_id if user_id else 'desconocido'}")  # ✅ Usar user_id
     except Exception as e:
         print(f"❌ Error en WebSocket notificaciones: {e}")
         traceback.print_exc()
@@ -337,10 +289,11 @@ async def websocket_notificaciones(websocket: WebSocket):
             except asyncio.CancelledError:
                 print("🔔 Tarea de revalidación de token cancelada")
         
-        if user:
-            await grupo_notification_manager.disconnect_user(user.id)
+        # ✅ USAR user_id EN VEZ DE user
+        if user_id:  # ✅ Cambiar "if user:" por "if user_id:"
+            await grupo_notification_manager.disconnect_user(user_id)  # ✅ Usar user_id
         
-        print(f"🔔 Limpieza completada para usuario {user.id if user else 'desconocido'}")
+        print(f"🔔 Limpieza completada para usuario {user_id if user_id else 'desconocido'}")  # ✅ Usar user_id
 
 @router.websocket("/{grupo_id}/ubicaciones")
 async def websocket_ubicaciones(websocket: WebSocket, grupo_id: int):

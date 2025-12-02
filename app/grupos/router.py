@@ -5,7 +5,7 @@ from .models import *
 from .crud import create_grupo
 from ..database.database import get_db
 from ..usuarios.security import get_current_user
-from datetime import datetime
+from datetime import datetime, timezone
 from ..usuarios.models import Usuario, DatosPersonales
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -322,3 +322,78 @@ def eliminar_grupo(
     db.commit()
 
     return {"message": f"Grupo '{grupo.nombre}' eliminado correctamente"}
+
+
+@router.post("/{grupo_id}/mensajes/marcar-entregados")
+def marcar_mensajes_entregados(
+    grupo_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Marca TODOS los mensajes no entregados de un grupo como entregados
+    Se llama cuando el usuario recibe FCM (incluso en segundo plano)
+    """
+    # Validar que el usuario pertenece al grupo
+    grupo = db.query(Grupo).filter(
+        Grupo.id == grupo_id,
+        Grupo.is_deleted == False
+    ).first()
+    
+    if not grupo:
+        raise HTTPException(404, "Grupo no encontrado")
+    
+    miembro = db.query(MiembroGrupo).filter_by(
+        usuario_id=current_user.id,
+        grupo_id=grupo_id,
+        activo=True
+    ).first()
+    
+    if not miembro and grupo.creado_por_id != current_user.id:
+        raise HTTPException(403, "No perteneces a este grupo")
+    
+    # 🔥 MARCAR MENSAJES COMO ENTREGADOS
+    mensajes_no_entregados = db.query(Mensaje).filter(
+        Mensaje.grupo_id == grupo_id,
+        Mensaje.remitente_id != current_user.id,  # No marcar mis propios mensajes
+        Mensaje.entregado_at == None
+    ).all()
+    
+    if not mensajes_no_entregados:
+        return {
+            "message": "No hay mensajes pendientes de entrega",
+            "mensajes_marcados": 0
+        }
+    
+    # Marcar como entregados
+    mensaje_ids = []
+    for mensaje in mensajes_no_entregados:
+        mensaje.entregado_at = datetime.now(timezone.utc)
+        mensaje_ids.append(mensaje.id)
+    
+    db.commit()
+    
+    # 🔥 NOTIFICAR POR WEBSOCKET (si hay usuarios conectados)
+    from .WebSocket.routers import manager
+    import asyncio
+    
+    for mensaje_id in mensaje_ids:
+        try:
+            # Intentar notificar por WebSocket (no bloqueante)
+            asyncio.create_task(manager.broadcast(grupo_id, {
+                "type": "mensaje_entregado",
+                "data": {
+                    "mensaje_id": mensaje_id,
+                    "entregado": True
+                }
+            }))
+        except:
+            pass  # Si no hay loop, ignorar
+    
+    print(f"📬 {len(mensaje_ids)} mensajes marcados como entregados para grupo {grupo_id}")
+    
+    return {
+        "message": f"{len(mensaje_ids)} mensajes marcados como entregados",
+        "mensajes_marcados": len(mensaje_ids),
+        "mensaje_ids": mensaje_ids
+    }
