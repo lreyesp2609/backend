@@ -118,14 +118,17 @@ def obtener_mensajes_grupo(
     
     from sqlalchemy import case, func
 
-    # 🆕 Consulta con join al remitente y sus datos personales
+    # 🔥 Consulta mejorada: excluir al remitente del conteo de lecturas
     mensajes = (
         db.query(
             Mensaje,
             func.sum(
                 case((LecturaMensaje.usuario_id == current_user.id, 1), else_=0)
             ).label("leido_por_mi"),
-            func.count(LecturaMensaje.id).label("total_lecturas"),
+            # 🔥 CAMBIO: solo contar lecturas de usuarios que NO son el remitente
+            func.count(
+                case((LecturaMensaje.usuario_id != Mensaje.remitente_id, LecturaMensaje.id), else_=None)
+            ).label("total_lecturas"),
             DatosPersonales.nombre.label("nombre_remitente"),
             DatosPersonales.apellido.label("apellido_remitente")
         )
@@ -146,13 +149,13 @@ def obtener_mensajes_grupo(
             MensajeOut(
                 id=mensaje.id,
                 remitente_id=mensaje.remitente_id,
-                remitente_nombre=f"{nombre} {apellido}",  # 👈 nombre completo
+                remitente_nombre=f"{nombre} {apellido}",
                 grupo_id=mensaje.grupo_id,
                 contenido=mensaje.contenido,
                 tipo=mensaje.tipo,
                 fecha_creacion=mensaje.fecha_creacion,
                 leido=bool(leido_por_mi > 0),
-                leido_por=total_lecturas or 0
+                leido_por=total_lecturas or 0  # Ahora solo cuenta lecturas de OTROS
             )
         )
 
@@ -165,9 +168,6 @@ def marcar_mensaje_leido(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    """
-    Marca un mensaje como leído por el usuario actual
-    """
     # Validar que el mensaje existe y pertenece al grupo
     mensaje = db.query(Mensaje).filter(
         Mensaje.id == mensaje_id,
@@ -176,6 +176,10 @@ def marcar_mensaje_leido(
     
     if not mensaje:
         raise HTTPException(404, "Mensaje no encontrado")
+    
+    # 🔥 NUEVO: No permitir que el remitente marque su propio mensaje como leído
+    if mensaje.remitente_id == current_user.id:
+        return {"message": "No puedes marcar tu propio mensaje como leído", "leido": False}
     
     # Verificar permisos en el grupo
     miembro = db.query(MiembroGrupo).filter_by(
