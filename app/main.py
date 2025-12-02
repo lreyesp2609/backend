@@ -105,6 +105,7 @@ from .services.router import router as services_router
 from .recordatorios.routers import router as recordatorios_router
 from .grupos.router import router as grupos_router
 from .services.fcm_router import router as fcm_router
+from .grupos.WebSocket.routers import router as ws_grupos_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -115,6 +116,7 @@ app.include_router(services_router)
 app.include_router(recordatorios_router)
 app.include_router(grupos_router)
 app.include_router(fcm_router)
+app.include_router(ws_grupos_router)
 
 
 if __name__ == "__main__":

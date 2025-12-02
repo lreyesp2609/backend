@@ -13,8 +13,6 @@ from .WebSocket.routers import router as ws_grupos_router
 
 router = APIRouter(prefix="/grupos", tags=["Grupos"])
 
-router.include_router(ws_grupos_router)
-
 @router.post("/crear", response_model=GrupoOut)
 def create_new_grupo(
     grupo: GrupoCreate,

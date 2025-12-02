@@ -15,6 +15,9 @@ from .ws_manager import WebSocketManager, UbicacionManager, grupo_notification_m
 from ...services.fcm_service import fcm_service
 from ...usuarios.models import FCMToken
 
+
+router = APIRouter(prefix="/websocket", tags=["WebSocket"])
+
 router = APIRouter()
 manager = WebSocketManager()
 ubicacion_manager = UbicacionManager()
