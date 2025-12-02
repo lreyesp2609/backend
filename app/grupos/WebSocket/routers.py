@@ -1115,6 +1115,7 @@ async def websocket_notificaciones(websocket: WebSocket):
         
         print(f"🔔 Limpieza completada para usuario {user.id if user else 'desconocido'}")
 
+
 def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
     """
     Notifica de forma síncrona que un mensaje fue leído
