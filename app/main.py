@@ -118,7 +118,6 @@ app.include_router(grupos_router)
 app.include_router(fcm_router)
 app.include_router(ws_grupos_router)
 
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

@@ -16,9 +16,8 @@ from ...services.fcm_service import fcm_service
 from ...usuarios.models import FCMToken
 
 
-router = APIRouter(prefix="/websocket", tags=["WebSocket"])
+router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
-router = APIRouter()
 manager = WebSocketManager()
 ubicacion_manager = UbicacionManager()
 
