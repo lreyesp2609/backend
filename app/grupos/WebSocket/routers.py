@@ -728,72 +728,58 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
 
             websocket.usuario_id = user_id  # ✅ USAR user_id
 
-            # Marcar mensajes como leídos al conectar
-            mensajes_no_leidos = db.query(Mensaje).outerjoin(
-                LecturaMensaje,
-                and_(
-                    LecturaMensaje.mensaje_id == Mensaje.id,
-                    LecturaMensaje.usuario_id == user_id  # ✅ USAR user_id
-                )
-            ).filter(
-                Mensaje.grupo_id == grupo_id,
-                Mensaje.remitente_id != user_id,  # ✅ USAR user_id
-                LecturaMensaje.id == None
-            ).all()
-
+            # ═══════════════════════════════════════════════════════
+            # 🔍 DEBUG: MARCAR MENSAJES COMO ENTREGADO AL CONECTAR
+            # ═══════════════════════════════════════════════════════
             mensajes_no_entregados = db.query(Mensaje).filter(
                 Mensaje.grupo_id == grupo_id,
                 Mensaje.remitente_id != user_id,
                 Mensaje.entregado_at == None
             ).all()
 
+            print(f"🔍 ════════════════════════════════════════")
+            print(f"🔍 VERIFICANDO MENSAJES NO ENTREGADOS")
+            print(f"🔍 ════════════════════════════════════════")
+            print(f"   Usuario conectado: {user_id}")
+            print(f"   Grupo: {grupo_id}")
+            print(f"   Mensajes no entregados encontrados: {len(mensajes_no_entregados)}")
+
             if mensajes_no_entregados:
                 print(f"📦 Marcando {len(mensajes_no_entregados)} mensajes como entregados")
-                for mensaje in mensajes_no_entregados:
-                    mensaje.entregado_at = datetime.now(timezone.utc)
-                db.commit()
                 
-                # Notificar al remitente que sus mensajes fueron entregados
                 for mensaje in mensajes_no_entregados:
-                    await manager.broadcast(grupo_id, {
+                    print(f"   📬 Mensaje ID {mensaje.id} de usuario {mensaje.remitente_id}")
+                    mensaje.entregado_at = datetime.now(timezone.utc)
+                
+                db.commit()
+                print(f"✅ Commit exitoso en base de datos")
+                
+                # 🔥 NOTIFICAR AL REMITENTE - CON DEBUG
+                for mensaje in mensajes_no_entregados:
+                    print(f"📤 Enviando notificación para mensaje {mensaje.id} al grupo {grupo_id}")
+                    
+                    # Verificar si hay usuarios conectados
+                    usuarios_conectados_dict = manager.active_connections.get(grupo_id, {})
+                    usuarios_conectados = len(usuarios_conectados_dict)
+                    print(f"   👥 Usuarios conectados en grupo {grupo_id}: {usuarios_conectados}")
+                    print(f"   👥 IDs conectados: {list(usuarios_conectados_dict.keys())}")
+                    
+                    resultado = await manager.broadcast(grupo_id, {
                         "type": "mensaje_entregado",
                         "data": {
                             "mensaje_id": mensaje.id,
                             "entregado": True
                         }
                     })
-                    print(f"📬 Mensaje {mensaje.id} marcado como entregado")
-            
-            # Marcar mensajes como leídos al conectar
-            if mensajes_no_leidos:
-                print(f"📖 Marcando {len(mensajes_no_leidos)} mensajes como leídos")
-                for mensaje in mensajes_no_leidos:
-                    lectura = LecturaMensaje(
-                        mensaje_id=mensaje.id,
-                        usuario_id=user_id,
-                        leido_at=datetime.now(timezone.utc)
-                    )
-                    db.add(lectura)
-                db.commit()
-                print(f"✅ {len(mensajes_no_leidos)} mensajes marcados como leídos")
-                
-                # 🆕 NOTIFICAR A TODOS los usuarios conectados sobre las lecturas
-                for mensaje in mensajes_no_leidos:
-                    # Calcular nuevo total de lecturas (sin incluir al remitente)
-                    total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
-                        LecturaMensaje.mensaje_id == mensaje.id,
-                        LecturaMensaje.usuario_id != mensaje.remitente_id
-                    ).scalar() or 0
                     
-                    # Broadcast de actualización
-                    await manager.broadcast(grupo_id, {
-                        "type": "mensaje_leido",
-                        "data": {
-                            "mensaje_id": mensaje.id,
-                            "leido_por": total_lecturas
-                        }
-                    })
-                    print(f"📢 Broadcast: mensaje {mensaje.id} ahora tiene {total_lecturas} lecturas")
+                    print(f"   {'✅' if resultado else '❌'} Broadcast resultado: {resultado}")
+                    print(f"📬 Notificación enviada para mensaje {mensaje.id}")
+                
+                print(f"✅ ════════════════════════════════════════")
+                print(f"✅ TODAS LAS NOTIFICACIONES ENVIADAS")
+                print(f"✅ ════════════════════════════════════════")
+            else:
+                print(f"ℹ️ No hay mensajes pendientes de entrega para usuario {user_id}")
 
             # Notificar contador actualizado
             await grupo_notification_manager.notify_unread_count_changed(user_id, db)

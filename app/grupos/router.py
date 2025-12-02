@@ -325,7 +325,7 @@ def eliminar_grupo(
 
 
 @router.post("/{grupo_id}/mensajes/marcar-entregados")
-def marcar_mensajes_entregados(
+async def marcar_mensajes_entregados(  # 🔥 CAMBIO 1: Agregar async
     grupo_id: int,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
@@ -373,24 +373,28 @@ def marcar_mensajes_entregados(
     
     db.commit()
     
-    # 🔥 NOTIFICAR POR WEBSOCKET (si hay usuarios conectados)
+    print(f"📬 ════════════════════════════════════════")
+    print(f"📬 ENDPOINT REST: {len(mensaje_ids)} mensajes marcados como entregados")
+    print(f"📬 ════════════════════════════════════════")
+    
+    # 🔥 CAMBIO 2: NOTIFICAR POR WEBSOCKET CORRECTAMENTE
     from .WebSocket.routers import manager
-    import asyncio
     
     for mensaje_id in mensaje_ids:
-        try:
-            # Intentar notificar por WebSocket (no bloqueante)
-            asyncio.create_task(manager.broadcast(grupo_id, {
-                "type": "mensaje_entregado",
-                "data": {
-                    "mensaje_id": mensaje_id,
-                    "entregado": True
-                }
-            }))
-        except:
-            pass  # Si no hay loop, ignorar
+        print(f"📤 Enviando notificación para mensaje {mensaje_id}")
+        
+        # 🔥 USAR await EN VEZ DE create_task
+        resultado = await manager.broadcast(grupo_id, {
+            "type": "mensaje_entregado",
+            "data": {
+                "mensaje_id": mensaje_id,
+                "entregado": True
+            }
+        })
+        
+        print(f"   {'✅' if resultado else '⚠️'} Broadcast resultado: {resultado}")
     
-    print(f"📬 {len(mensaje_ids)} mensajes marcados como entregados para grupo {grupo_id}")
+    print(f"✅ Notificaciones enviadas para {len(mensaje_ids)} mensajes")
     
     return {
         "message": f"{len(mensaje_ids)} mensajes marcados como entregados",
