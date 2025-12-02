@@ -905,6 +905,8 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
             if action == "mensaje":
                 contenido = data.get("contenido", "").strip()
                 tipo = data.get("tipo", "texto")
+                temp_id = data.get("temp_id")  # 🆕 CAPTURAR temp_id del cliente
+                
                 if not contenido:
                     continue
 
@@ -917,7 +919,7 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         contenido=contenido,
                         tipo=tipo,
                         fecha_creacion=datetime.now(timezone.utc),
-                        entregado_at=None  # 🆕 INICIAMOS SIN ENTREGAR
+                        entregado_at=None
                     )
                     db.add(mensaje)
                     db.commit()
@@ -965,19 +967,21 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                         "type": "mensaje",
                         "data": {
                             "id": mensaje.id,
+                            "temp_id": temp_id,  # 🆕 DEVOLVER temp_id al cliente
                             "remitente_id": mensaje.remitente_id,
                             "remitente_nombre": user_nombre_completo,
                             "grupo_id": mensaje.grupo_id,
                             "contenido": mensaje.contenido,
                             "tipo": mensaje.tipo,
                             "fecha_creacion": mensaje.fecha_creacion.isoformat(),
-                            "entregado": bool(mensaje.entregado_at),  # 🆕 ESTADO CORRECTO
+                            "entregado": bool(mensaje.entregado_at),
                             "leido": False,
                             "leido_por": total_lecturas
                         }
                     }
 
                     # 8️⃣ ENVIAR por WebSocket
+                    print(f"📤 Enviando mensaje por WebSocket - temp_id={temp_id}, id_real={mensaje.id}")
                     print(f"📤 Enviando mensaje por WebSocket - entregado={bool(mensaje.entregado_at)}, leido_por={total_lecturas}")
                     
                     # 🔥 BROADCAST (esto enviará el mensaje a todos los conectados)
