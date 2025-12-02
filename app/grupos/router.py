@@ -177,7 +177,7 @@ def marcar_mensaje_leido(
     if not mensaje:
         raise HTTPException(404, "Mensaje no encontrado")
     
-    # 🔥 NUEVO: No permitir que el remitente marque su propio mensaje como leído
+    # 🔥 No permitir que el remitente marque su propio mensaje como leído
     if mensaje.remitente_id == current_user.id:
         return {"message": "No puedes marcar tu propio mensaje como leído", "leido": False}
     
@@ -208,6 +208,16 @@ def marcar_mensaje_leido(
     )
     db.add(lectura)
     db.commit()
+    
+    # 🔥 NUEVO: Calcular total de lecturas (excluyendo al remitente)
+    total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
+        LecturaMensaje.mensaje_id == mensaje_id,
+        LecturaMensaje.usuario_id != mensaje.remitente_id
+    ).scalar() or 0
+    
+    # 🔥 NUEVO: Notificar por WebSocket usando la función helper
+    from .WebSocket.routers import notify_mensaje_leido_sync
+    notify_mensaje_leido_sync(grupo_id, mensaje_id, total_lecturas)
     
     return {"message": "Mensaje marcado como leído", "leido": True}
 

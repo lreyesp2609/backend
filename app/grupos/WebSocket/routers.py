@@ -188,20 +188,39 @@ async def websocket_grupo(websocket: WebSocket, grupo_id: int):
                 LecturaMensaje.id == None
             ).all()
             
+            # Marcar mensajes como leídos al conectar
             if mensajes_no_leidos:
                 print(f"📖 Marcando {len(mensajes_no_leidos)} mensajes como leídos")
                 for mensaje in mensajes_no_leidos:
                     lectura = LecturaMensaje(
                         mensaje_id=mensaje.id,
-                        usuario_id=user_id,  # ✅ USAR user_id
+                        usuario_id=user_id,
                         leido_at=datetime.now(timezone.utc)
                     )
                     db.add(lectura)
                 db.commit()
                 print(f"✅ {len(mensajes_no_leidos)} mensajes marcados como leídos")
-            
+                
+                # 🆕 NOTIFICAR A TODOS los usuarios conectados sobre las lecturas
+                for mensaje in mensajes_no_leidos:
+                    # Calcular nuevo total de lecturas (sin incluir al remitente)
+                    total_lecturas = db.query(func.count(LecturaMensaje.id)).filter(
+                        LecturaMensaje.mensaje_id == mensaje.id,
+                        LecturaMensaje.usuario_id != mensaje.remitente_id
+                    ).scalar() or 0
+                    
+                    # Broadcast de actualización
+                    await manager.broadcast(grupo_id, {
+                        "type": "mensaje_leido",
+                        "data": {
+                            "mensaje_id": mensaje.id,
+                            "leido_por": total_lecturas
+                        }
+                    })
+                    print(f"📢 Broadcast: mensaje {mensaje.id} ahora tiene {total_lecturas} lecturas")
+
             # Notificar contador actualizado
-            await grupo_notification_manager.notify_unread_count_changed(user_id, db)  # ✅ USAR user_id
+            await grupo_notification_manager.notify_unread_count_changed(user_id, db)
             
         finally:
             db.close()  # ← CERRAR DB después de autenticación
@@ -922,3 +941,15 @@ async def websocket_notificaciones(websocket: WebSocket):
         
         # ← NO HAY db.close() aquí porque ya no tenemos sesión abierta
         print(f"🔔 Limpieza completada para usuario {user.id if user else 'desconocido'}")
+
+def notify_mensaje_leido_sync(grupo_id: int, mensaje_id: int, leido_por: int):
+    """
+    Notifica de forma síncrona que un mensaje fue leído
+    """
+    asyncio.create_task(manager.broadcast(grupo_id, {
+        "type": "mensaje_leido",
+        "data": {
+            "mensaje_id": mensaje_id,
+            "leido_por": leido_por
+        }
+    }))
