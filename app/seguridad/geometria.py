@@ -5,15 +5,6 @@ def crear_poligono_circular(lat: float, lon: float, radio_metros: int, num_punto
     """
     Crea un polígono circular dado un punto central y un radio
     
-    Args:
-        lat: Latitud del centro
-        lon: Longitud del centro
-        radio_metros: Radio en metros
-        num_puntos: Número de puntos del polígono (más puntos = más circular)
-    
-    Returns:
-        Lista de puntos que forman el polígono circular
-        [{'lat': float, 'lon': float}, ...]
     """
     puntos = []
     
@@ -30,8 +21,10 @@ def crear_poligono_circular(lat: float, lon: float, radio_metros: int, num_punto
     for i in range(num_puntos):
         angulo = (2 * math.pi * i) / num_puntos
         
-        dlat = radio_grados_lat * math.cos(angulo)
-        dlon = radio_grados_lon * math.sin(angulo)
+        # 🔥 CORRECCIÓN: Usar sin() para latitud y cos() para longitud
+        # Esto crea el círculo correctamente orientado
+        dlat = radio_grados_lat * math.sin(angulo)  # Cambio: sin en vez de cos
+        dlon = radio_grados_lon * math.cos(angulo)  # Cambio: cos en vez de sin
         
         puntos.append({
             'lat': lat + dlat,
