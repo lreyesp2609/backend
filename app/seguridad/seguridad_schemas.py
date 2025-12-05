@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict
 from datetime import datetime
 
@@ -26,43 +26,21 @@ class ZonaPeligrosaUpdate(BaseModel):
     activa: Optional[bool] = None
 
 class ZonaPeligrosaResponse(BaseModel):
+    """Respuesta de zona peligrosa"""
     id: int
+    usuario_id: int
     nombre: str
+    poligono: List[Dict[str, float]]
     nivel_peligro: int
-    tipo: str | None
-    notas: str | None
+    tipo: Optional[str]
     activa: bool
-    poligono: List[Dict[str, float]]  # Lista de puntos del círculo
-    radio_metros: int | None
-    fecha_creacion: str
-    # 🔥 Campo calculado que SÍ se serializa
-    centro: Optional[Dict[str, float]] = None
+    fecha_creacion: datetime
+    fecha_actualizacion: Optional[datetime]
+    notas: Optional[str]
+    radio_metros: Optional[int]
     
-    # 🔥 PYDANTIC V2: Usar @model_validator en lugar de @root_validator
-    @model_validator(mode='after')
-    def calcular_centro(self) -> 'ZonaPeligrosaResponse':
-        """
-        🔥 Calcula el centro del polígono automáticamente
-        Compatible con Pydantic V2
-        """
-        if self.poligono and len(self.poligono) > 0:
-            lat_sum = sum(p['lat'] for p in self.poligono)
-            lon_sum = sum(p['lon'] for p in self.poligono)
-            n = len(self.poligono)
-            
-            self.centro = {
-                'lat': lat_sum / n,
-                'lon': lon_sum / n
-            }
-        else:
-            self.centro = None
-        
-        return self
-    
-    # 🔥 PYDANTIC V2: Cambiar orm_mode → from_attributes
-    model_config = {
-        'from_attributes': True
-    }
+    class Config:
+        from_attributes = True
         
 class RutaParaValidar(BaseModel):
     """Ruta que será validada"""
@@ -91,13 +69,11 @@ class RutaValidada(BaseModel):
 
 class ValidarRutasRequest(BaseModel):
     """Request para validar múltiples rutas"""
-    rutas: List[RutaParaValidar] = Field(..., min_length=1, max_length=10)
+    rutas: List[RutaParaValidar] = Field(..., min_items=1, max_items=10)
     ubicacion_id: int
 
-    # 🔥 PYDANTIC V2: Cambiar @validator → @field_validator
-    @field_validator('rutas')
-    @classmethod
-    def validar_tipos_unicos(cls, rutas: List[RutaParaValidar]) -> List[RutaParaValidar]:
+    @validator('rutas')
+    def validar_tipos_unicos(cls, rutas):
         tipos = [r.tipo for r in rutas]
         if len(tipos) != len(set(tipos)):
             raise ValueError("No puede haber rutas con el mismo tipo")
