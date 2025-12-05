@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, root_validator
 from typing import List, Optional, Dict
 from datetime import datetime
 
@@ -26,21 +26,43 @@ class ZonaPeligrosaUpdate(BaseModel):
     activa: Optional[bool] = None
 
 class ZonaPeligrosaResponse(BaseModel):
-    """Respuesta de zona peligrosa"""
     id: int
-    usuario_id: int
     nombre: str
-    poligono: List[Dict[str, float]]
     nivel_peligro: int
-    tipo: Optional[str]
+    tipo: str | None
+    notas: str | None
     activa: bool
-    fecha_creacion: datetime
-    fecha_actualizacion: Optional[datetime]
-    notas: Optional[str]
-    radio_metros: Optional[int]
+    poligono: List[Dict[str, float]]  # Lista de puntos del círculo
+    radio_metros: int | None
+    fecha_creacion: str
+    # 🔥 NUEVO: Campo calculado que SÍ se serializa
+    centro: Optional[Dict[str, float]] = None
+    
+    @root_validator(pre=False)
+    def calcular_centro(cls, values):
+        """
+        🔥 Calcula el centro del polígono automáticamente
+        Se ejecuta DESPUÉS de cargar los datos
+        """
+        poligono = values.get('poligono')
+        
+        if poligono and len(poligono) > 0:
+            lat_sum = sum(p['lat'] for p in poligono)
+            lon_sum = sum(p['lon'] for p in poligono)
+            n = len(poligono)
+            
+            values['centro'] = {
+                'lat': lat_sum / n,
+                'lon': lon_sum / n
+            }
+        else:
+            values['centro'] = None
+        
+        return values
     
     class Config:
-        from_attributes = True
+        orm_mode = True
+        
         
 class RutaParaValidar(BaseModel):
     """Ruta que será validada"""
