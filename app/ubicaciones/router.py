@@ -17,7 +17,10 @@ def crear_ubicacion_usuario(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    return crear_ubicacion(db, current_user.id, ubicacion)
+    nueva_ubicacion = crear_ubicacion(db, current_user.id, ubicacion)
+    if not nueva_ubicacion:
+        raise HTTPException(status_code=400, detail="LOCATION_NAME_ALREADY_EXISTS")
+    return nueva_ubicacion
 
 @router.get("/", response_model=List[UbicacionUsuarioResponse])
 def listar_ubicaciones(
@@ -47,6 +50,8 @@ def actualizar_ubicacion_usuario(
     ubicacion = actualizar_ubicacion(db, ubicacion_id, current_user.id, datos)
     if not ubicacion:
         raise HTTPException(status_code=404, detail="Ubicación no encontrada")
+    if ubicacion == "DUPLICATE_NAME":
+        raise HTTPException(status_code=400, detail="LOCATION_NAME_ALREADY_EXISTS")
     return ubicacion
 
 @router.delete("/{ubicacion_id}", response_model=UbicacionUsuarioResponse)
