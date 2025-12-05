@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 class ValidadorSeguridadPersonal:
     """
     🔒 Validador de rutas contra zonas peligrosas PERSONALES del usuario
+    ✅ VERSIÓN PRODUCCIÓN - Optimizado para diferentes terrenos
     """
     
     def __init__(self, db: Session, usuario_id: int):
@@ -15,8 +16,15 @@ class ValidadorSeguridadPersonal:
         self.usuario_id = usuario_id
         self._cache_zonas = None
         self._cache_timestamp = None
-        # 🆕 Tolerancia para puentes/pasos elevados
-        self.TOLERANCIA_BUFFER_METROS = 30  # Ignorar si pasa muy cerca pero no dentro
+        
+        # 🔥 CONFIGURACIÓN ADAPTATIVA PARA PRODUCCIÓN
+        self.BUFFER_DETECCION_METROS = 50  # Detecta rutas CERCA del borde (no solo dentro)
+        self.PUNTOS_MINIMOS_ALERTA = 2     # Requiere 2+ puntos para confirmar (evita falsos positivos)
+        self.INTERVALO_MUESTREO = 5        # Analizar cada 5 puntos (balance precisión/rendimiento)
+        
+        # 🎯 Niveles de riesgo adaptativos
+        self.UMBRAL_RIESGO_ALTO = 4        # Nivel 4-5: Bloqueo total
+        self.UMBRAL_RIESGO_MEDIO = 3       # Nivel 3: Advertencia fuerte
     
     def _get_zonas_peligrosas_usuario(self) -> List:
         """
@@ -46,9 +54,13 @@ class ValidadorSeguridadPersonal:
     
     def validar_ruta(self, geometry_polyline: str, metadata: Dict = None) -> Dict:
         """
-        Valida si una ruta pasa por zonas peligrosas del usuario
+        ✅ VERSIÓN PRODUCCIÓN: Valida si una ruta pasa por zonas peligrosas del usuario
         
-        🔥 MEJORADO: Usa distancia al centro + buffer en lugar de Ray Casting puro
+        🔥 MEJORAS:
+        - Detecta rutas CERCA del borde (buffer +50m para seguridad)
+        - Requiere múltiples puntos para confirmar (evita falsos positivos en puentes)
+        - Calcula distancia mínima real a cada zona
+        - Adaptativo a diferentes densidades de puntos
         """
         try:
             # Obtener zonas peligrosas del usuario
@@ -76,14 +88,25 @@ class ValidadorSeguridadPersonal:
                     'error': True
                 }
             
-            # 🔥 NUEVO ALGORITMO: Distancia al centro + buffer
+            # 🔥 MUESTREO ADAPTATIVO
+            # Para rutas largas (1000+ puntos): cada 10
+            # Para rutas medianas (100-1000): cada 5
+            # Para rutas cortas (<100): todos los puntos
+            if len(puntos_ruta) > 1000:
+                intervalo = 10
+            elif len(puntos_ruta) > 100:
+                intervalo = self.INTERVALO_MUESTREO
+            else:
+                intervalo = 1
+            
+            puntos_muestreados = puntos_ruta[::intervalo]
+            
+            logger.info(f"🔍 Validando ruta: {len(puntos_ruta)} puntos totales, "
+                       f"{len(puntos_muestreados)} muestreados (cada {intervalo})")
+            
+            # 🔥 ANÁLISIS POR ZONA CON BUFFER DE SEGURIDAD
             zonas_detectadas = []
             nivel_riesgo_maximo = 0
-            
-            # Muestrear puntos (cada 5 en lugar de cada 10 para mayor precisión)
-            puntos_muestreados = puntos_ruta[::5] if len(puntos_ruta) > 20 else puntos_ruta
-            
-            logger.info(f"🔍 Validando ruta con {len(puntos_muestreados)} puntos muestreados")
             
             for zona in zonas_peligrosas:
                 # Obtener centro de la zona
@@ -93,16 +116,20 @@ class ValidadorSeguridadPersonal:
                     continue
                 
                 radio_zona = zona.radio_metros or 200
-                # 🔥 Añadir buffer de tolerancia (para evitar falsos positivos en puentes)
-                radio_con_buffer = radio_zona - self.TOLERANCIA_BUFFER_METROS
+                
+                # 🔥 BUFFER DE DETECCIÓN: Amplía la zona para detectar rutas CERCANAS
+                # Esto previene que rutas pasen "rozando" sin ser detectadas
+                radio_con_buffer = radio_zona + self.BUFFER_DETECCION_METROS
                 
                 puntos_dentro_zona = 0
                 distancias_minimas = []
                 
-                logger.info(f"📍 Evaluando zona '{zona.nombre}': centro=({centro['lat']}, {centro['lon']}), radio={radio_zona}m")
+                logger.info(f"📍 Evaluando zona '{zona.nombre}': "
+                           f"centro=({centro['lat']:.6f}, {centro['lon']:.6f}), "
+                           f"radio_base={radio_zona}m, radio_detección={radio_con_buffer}m")
                 
+                # Calcular distancias de todos los puntos muestreados
                 for punto in puntos_muestreados:
-                    # 🔥 Calcular distancia haversine al centro
                     distancia = self._calcular_distancia_haversine(
                         punto['lat'], punto['lon'],
                         centro['lat'], centro['lon']
@@ -110,20 +137,34 @@ class ValidadorSeguridadPersonal:
                     
                     distancias_minimas.append(distancia)
                     
-                    # 🔥 Solo contar si está DENTRO del círculo (con buffer)
+                    # 🔥 Contar puntos dentro del radio de detección (con buffer)
                     if distancia <= radio_con_buffer:
                         puntos_dentro_zona += 1
                 
-                # Debug: mostrar distancia mínima a la zona
+                # Obtener distancia mínima real a la zona
                 dist_min_zona = min(distancias_minimas) if distancias_minimas else float('inf')
-                logger.info(f"  ↳ Distancia mínima a zona: {dist_min_zona:.1f}m")
-                logger.info(f"  ↳ Puntos dentro de zona: {puntos_dentro_zona}/{len(puntos_muestreados)}")
                 
-                # 🔥 CRITERIO MÁS ESTRICTO: Requiere múltiples puntos dentro
-                if puntos_dentro_zona >= 2:  # Al menos 2 puntos dentro
+                logger.info(f"  ↳ Distancia mínima a zona: {dist_min_zona:.1f}m (radio: {radio_zona}m)")
+                logger.info(f"  ↳ Puntos dentro de radio detección ({radio_con_buffer}m): "
+                           f"{puntos_dentro_zona}/{len(puntos_muestreados)}")
+                
+                # 🔥 CRITERIO DE ALERTA: Múltiples puntos + consideración de densidad
+                # Ajustar umbral según cantidad de puntos muestreados
+                umbral_puntos = max(self.PUNTOS_MINIMOS_ALERTA, 
+                                   int(len(puntos_muestreados) * 0.02))  # Mínimo 2% de puntos
+                
+                if puntos_dentro_zona >= umbral_puntos:
                     porcentaje = (puntos_dentro_zona / len(puntos_muestreados)) * 100
                     
-                    logger.warning(f"⚠️ ZONA DETECTADA: {zona.nombre} - {porcentaje:.1f}% de la ruta")
+                    # 🔥 Clasificar proximidad
+                    if dist_min_zona <= radio_zona:
+                        proximidad = "DENTRO DE LA ZONA"
+                    elif dist_min_zona <= radio_zona + 25:
+                        proximidad = "MUY CERCA DEL BORDE"
+                    else:
+                        proximidad = "CERCA DE LA ZONA"
+                    
+                    logger.warning(f"⚠️ ZONA DETECTADA: {zona.nombre} - {porcentaje:.1f}% de la ruta - {proximidad}")
                     
                     zonas_detectadas.append({
                         'zona_id': zona.id,
@@ -132,21 +173,27 @@ class ValidadorSeguridadPersonal:
                         'tipo': zona.tipo,
                         'porcentaje_ruta': round(porcentaje, 2),
                         'notas': zona.notas,
-                        'distancia_minima': round(dist_min_zona, 1)
+                        'distancia_minima': round(dist_min_zona, 1),
+                        'radio_zona': radio_zona,
+                        'proximidad': proximidad,
+                        'puntos_detectados': puntos_dentro_zona
                     })
                     
                     nivel_riesgo_maximo = max(nivel_riesgo_maximo, zona.nivel_peligro)
+                else:
+                    logger.info(f"  ↳ Zona '{zona.nombre}' descartada: "
+                               f"solo {puntos_dentro_zona} puntos (umbral: {umbral_puntos})")
             
-            # Determinar si es segura
-            es_segura = nivel_riesgo_maximo < 3
+            # 🔥 DETERMINAR SEGURIDAD CON CRITERIOS ADAPTATIVOS
+            es_segura = nivel_riesgo_maximo < self.UMBRAL_RIESGO_MEDIO
             
-            # Generar mensaje
+            # 🔥 GENERAR MENSAJE CONTEXTUAL
             mensaje = None
             if not es_segura:
-                if nivel_riesgo_maximo >= 4:
-                    mensaje = f"RIESGO ALTO: Esta ruta pasa por {len(zonas_detectadas)} zona(s) que marcaste como peligrosas"
-                elif nivel_riesgo_maximo == 3:
-                    mensaje = f"PRECAUCIÓN: Esta ruta pasa por {len(zonas_detectadas)} zona(s) con riesgo moderado"
+                if nivel_riesgo_maximo >= self.UMBRAL_RIESGO_ALTO:
+                    mensaje = f"⛔ RIESGO ALTO: Esta ruta pasa por {len(zonas_detectadas)} zona(s) que marcaste como MUY PELIGROSAS. Se recomienda elegir otra ruta."
+                elif nivel_riesgo_maximo == self.UMBRAL_RIESGO_MEDIO:
+                    mensaje = f"⚠️ PRECAUCIÓN: Esta ruta pasa cerca de {len(zonas_detectadas)} zona(s) con riesgo moderado. Considera alternativas si es posible."
             
             resultado = {
                 'es_segura': es_segura,
@@ -154,28 +201,33 @@ class ValidadorSeguridadPersonal:
                 'zonas_detectadas': zonas_detectadas,
                 'mensaje': mensaje,
                 'puntos_analizados': len(puntos_ruta),
-                'puntos_muestreados': len(puntos_muestreados)
+                'puntos_muestreados': len(puntos_muestreados),
+                'config': {
+                    'buffer_deteccion': self.BUFFER_DETECCION_METROS,
+                    'umbral_puntos': self.PUNTOS_MINIMOS_ALERTA
+                }
             }
             
-            logger.info(f"✅ Usuario {self.usuario_id} - Validación: segura={es_segura}, "
-                       f"nivel={nivel_riesgo_maximo}, zonas={len(zonas_detectadas)}")
+            logger.info(f"✅ Usuario {self.usuario_id} - Validación completada: "
+                       f"segura={es_segura}, nivel={nivel_riesgo_maximo}, "
+                       f"zonas={len(zonas_detectadas)}")
             
             return resultado
             
         except Exception as e:
             logger.error(f"Error validando ruta para usuario {self.usuario_id}: {e}", exc_info=True)
             return {
-                'es_segura': True,
+                'es_segura': True,  # En caso de error, permitir la ruta por seguridad
                 'nivel_riesgo': 0,
                 'zonas_detectadas': [],
-                'mensaje': 'Error en validación',
+                'mensaje': 'Error en validación de seguridad',
                 'error': str(e)
             }
     
     def _calcular_distancia_haversine(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
-        🔥 NUEVO: Calcula distancia en metros usando fórmula de Haversine
-        Más preciso que Ray Casting para círculos
+        🌍 Calcula distancia en metros usando fórmula de Haversine
+        Preciso para distancias cortas (<1000km) en cualquier terreno
         
         Returns:
             Distancia en metros
@@ -198,6 +250,8 @@ class ValidadorSeguridadPersonal:
     def validar_multiples_rutas(self, rutas: List[Dict]) -> List[Dict]:
         """
         Valida múltiples rutas y las ordena por seguridad
+        
+        🔥 PRODUCCIÓN: Prioriza rutas seguras, luego por distancia/tiempo
         """
         resultados = []
         
@@ -218,17 +272,26 @@ class ValidadorSeguridadPersonal:
                 'zonas_detectadas': validacion['zonas_detectadas'],
                 'mensaje': validacion['mensaje'],
                 'distance': ruta.get('distance'),
-                'duration': ruta.get('duration')
+                'duration': ruta.get('duration'),
+                'geometry': ruta.get('geometry')  # Preservar geometría
             })
         
-        # Ordenar por seguridad
-        resultados.sort(key=lambda x: (not x['es_segura'], x['nivel_riesgo']))
+        # 🔥 ORDENAMIENTO INTELIGENTE:
+        # 1. Rutas seguras primero
+        # 2. Luego por menor nivel de riesgo
+        # 3. Finalmente por distancia (rutas cortas primero)
+        resultados.sort(key=lambda x: (
+            not x['es_segura'],           # Seguras primero
+            x['nivel_riesgo'],            # Menor riesgo primero
+            x.get('distance', float('inf'))  # Más cortas primero
+        ))
         
         return resultados
     
     def _decode_polyline(self, encoded: str) -> List[Dict]:
         """
         Decodifica polyline de OpenRouteService a lista de coordenadas
+        Compatible con diferentes proveedores de rutas
         """
         points = []
         index = 0
@@ -280,6 +343,7 @@ class ValidadorSeguridadPersonal:
     def obtener_estadisticas_seguridad(self) -> Dict:
         """
         Obtiene estadísticas de seguridad del usuario
+        Útil para dashboards y reportes
         """
         from .models import ZonaPeligrosaUsuario
                 
@@ -296,13 +360,33 @@ class ValidadorSeguridadPersonal:
         # Contar por nivel
         zonas_por_nivel = {}
         for zona in zonas:
-            zonas_por_nivel[zona.nivel_peligro] = zonas_por_nivel.get(zona.nivel_peligro, 0) + 1
+            nivel = zona.nivel_peligro
+            zonas_por_nivel[nivel] = zonas_por_nivel.get(nivel, 0) + 1
+        
+        # Calcular cobertura total (suma de áreas)
+        area_total_km2 = sum([
+            3.14159 * ((z.radio_metros or 200) / 1000) ** 2 
+            for z in zonas if z.activa
+        ])
         
         return {
             'total_zonas': len(zonas),
             'zonas_activas': len([z for z in zonas if z.activa]),
             'zonas_inactivas': len([z for z in zonas if not z.activa]),
             'zonas_por_tipo': zonas_por_tipo,
-            'zonas_por_nivel': zonas_por_nivel
+            'zonas_por_nivel': zonas_por_nivel,
+            'area_total_vigilada_km2': round(area_total_km2, 2),
+            'configuracion': {
+                'buffer_deteccion_metros': self.BUFFER_DETECCION_METROS,
+                'puntos_minimos_alerta': self.PUNTOS_MINIMOS_ALERTA
+            }
         }
-
+    
+    def invalidar_cache(self):
+        """
+        Invalida el caché de zonas peligrosas
+        Útil después de que el usuario modifique sus zonas
+        """
+        self._cache_zonas = None
+        self._cache_timestamp = None
+        logger.info(f"Caché de zonas invalidado para usuario {self.usuario_id}")
