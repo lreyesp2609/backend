@@ -2,8 +2,6 @@ from sqlalchemy import Column, Float, ForeignKey, Integer, String, DateTime
 from sqlalchemy.orm import relationship
 from ....database.database import Base
 
-from sqlalchemy import Enum
-
 class Transporte(Base):
     __tablename__ = "transportes"
 

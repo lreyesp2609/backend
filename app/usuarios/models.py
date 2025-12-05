@@ -26,8 +26,8 @@ class Usuario(Base):
     datos_personales = relationship("DatosPersonales")
     rol = relationship("Rol")
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
-    fcm_tokens = relationship("FCMToken", back_populates="usuario", cascade="all, delete-orphan")  # ✅
-
+    fcm_tokens = relationship("FCMToken", back_populates="usuario", cascade="all, delete-orphan")
+    zonas_peligrosas = relationship("ZonaPeligrosaUsuario", back_populates="usuario", cascade="all, delete-orphan")
 
 class FCMToken(Base):
     __tablename__ = "fcm_tokens"
