@@ -28,21 +28,6 @@ def marcar_zona_peligrosa(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    """
-    🎯 Marca una zona como peligrosa para el usuario autenticado
-    
-    El usuario toca y mantiene presionado en el mapa para marcar zonas inseguras.
-    Solo el usuario puede ver sus propias zonas (100% privado).
-    
-    **Parámetros:**
-    - **nombre**: Nombre descriptivo (ej: "Callejón oscuro cerca de casa")
-    - **lat**: Latitud del centro de la zona
-    - **lon**: Longitud del centro de la zona
-    - **radio_metros**: Radio de la zona en metros (50-1000m)
-    - **nivel_peligro**: 1 (bajo) a 5 (muy alto)
-    - **tipo**: asalto, trafico_pesado, poca_iluminacion, otro
-    - **notas**: Notas personales opcionales
-    """
     try:
         # Validar coordenadas
         if not validar_coordenadas(zona.lat, zona.lon):
@@ -51,18 +36,24 @@ def marcar_zona_peligrosa(
                 detail="Coordenadas inválidas"
             )
         
-        # Crear polígono circular
-        poligono = crear_poligono_circular(
+        # 🔥 GUARDAR EL CENTRO ORIGINAL COMO PRIMER PUNTO
+        poligono = [
+            {"lat": zona.lat, "lon": zona.lon}  # ✅ Centro primero
+        ]
+        
+        # Luego agregar los puntos del círculo
+        puntos_circulo = crear_poligono_circular(
             lat=zona.lat,
             lon=zona.lon,
             radio_metros=zona.radio_metros
         )
+        poligono.extend(puntos_circulo)  # Agregar puntos del borde
         
         # Crear zona en BD
         nueva_zona = ZonaPeligrosaUsuario(
             usuario_id=current_user.id,
             nombre=zona.nombre,
-            poligono=poligono,
+            poligono=poligono,  # Ahora el primer punto ES el centro
             nivel_peligro=zona.nivel_peligro,
             tipo=zona.tipo,
             notas=zona.notas,
@@ -135,21 +126,6 @@ def validar_rutas_seguridad(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    """
-    🔐 ENDPOINT PRINCIPAL: Valida múltiples rutas contra zonas peligrosas del usuario
-    
-    **Flujo:**
-    1. Android genera 3 rutas con ORS (fastest, shortest, recommended)
-    2. Android envía las 3 geometrías a este endpoint
-    3. Backend valida cada ruta contra las zonas peligrosas DEL USUARIO
-    4. Backend devuelve clasificación de seguridad para cada ruta
-    5. Android muestra badges de seguridad en el selector de rutas
-    
-    **Returns:**
-    - Lista de rutas validadas con nivel de riesgo
-    - Recomendación de ML (UCB)
-    - Información sobre zonas peligrosas detectadas
-    """
     try:
         # Inicializar validador para este usuario
         validador = ValidadorSeguridadPersonal(db, current_user.id)

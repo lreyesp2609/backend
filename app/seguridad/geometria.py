@@ -1,30 +1,32 @@
 import math
 from typing import List, Dict
 
-def crear_poligono_circular(lat: float, lon: float, radio_metros: int, num_puntos: int = 16) -> List[Dict]:
+def crear_poligono_circular(lat: float, lon: float, radio_metros: int, num_puntos: int = 32) -> List[Dict]:
     """
     Crea un polígono circular dado un punto central y un radio
     
+    Args:
+        lat: Latitud del centro
+        lon: Longitud del centro
+        radio_metros: Radio del círculo en metros
+        num_puntos: Número de puntos del polígono (default 32)
+    
+    Returns:
+        Lista de puntos [{'lat': float, 'lon': float}, ...]
     """
     puntos = []
     
-    # Conversión aproximada: 1 grado de latitud ≈ 111km
-    # Para longitud depende de la latitud actual
-    km_por_grado_lat = 111.0
-    km_por_grado_lon = 111.0 * math.cos(math.radians(lat))
-    
-    # Convertir radio a grados
-    radio_grados_lat = (radio_metros / 1000.0) / km_por_grado_lat
-    radio_grados_lon = (radio_metros / 1000.0) / km_por_grado_lon
+    # Conversión de metros a grados
+    radio_grados_lat = radio_metros / 111320.0
+    radio_grados_lon = radio_metros / (111320.0 * math.cos(math.radians(lat)))
     
     # Generar puntos alrededor del círculo
-    for i in range(num_puntos):
+    for i in range(num_puntos + 1):  # +1 para cerrar el círculo
         angulo = (2 * math.pi * i) / num_puntos
         
-        # 🔥 CORRECCIÓN: Usar sin() para latitud y cos() para longitud
-        # Esto crea el círculo correctamente orientado
-        dlat = radio_grados_lat * math.sin(angulo)  # Cambio: sin en vez de cos
-        dlon = radio_grados_lon * math.cos(angulo)  # Cambio: cos en vez de sin
+        # ✅ CORRECTO: cos() para latitud, sin() para longitud
+        dlat = radio_grados_lat * math.cos(angulo)
+        dlon = radio_grados_lon * math.sin(angulo)
         
         puntos.append({
             'lat': lat + dlat,
