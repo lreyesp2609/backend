@@ -216,9 +216,9 @@ def validar_rutas_seguridad(
         if not todas_seguras and mejor_ruta_segura is None:
             nivel_minimo = min(rv.nivel_riesgo for rv in rutas_validadas)
             if nivel_minimo >= 4:
-                advertencia_general = "⚠️ TODAS las rutas pasan por zonas de alto riesgo. Considera usar transporte alternativo."
+                advertencia_general = "TODAS las rutas pasan por zonas de alto riesgo."
             else:
-                advertencia_general = "⚠️ Todas las rutas pasan por zonas con cierto nivel de riesgo. Mantente alerta."
+                advertencia_general = "Todas las rutas pasan por zonas con cierto nivel de riesgo. Mantente alerta."
         
         # Contar zonas activas del usuario
         total_zonas = db.query(ZonaPeligrosaUsuario).filter(
