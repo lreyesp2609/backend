@@ -7,7 +7,7 @@ from ..database.database import get_db
 from ..usuarios.security import get_current_user
 from .models import ZonaPeligrosaUsuario
 from .seguridad_schemas import *
-from .validador_seguridad_personal import EstadisticasSeguridad, ValidadorSeguridadPersonal, ValidarRutasRequest, ValidarRutasResponse
+from .validador_seguridad_personal import *
 from ..services.ucb_service import UCBService
 from .geometria import *
 
