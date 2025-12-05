@@ -12,6 +12,7 @@ from .ubicaciones.ubicaciones_historial.rutas.models import *
 from .database.seed import create_default_roles_and_admin
 from .ubicaciones.ubicaciones_historial.seed import create_default_estados_ubicacion
 from .grupos.models import *
+from .seguridad.models import *
 import logging
 
 # Configurar logging
@@ -113,6 +114,7 @@ from .recordatorios.routers import router as recordatorios_router
 from .grupos.router import router as grupos_router
 from .services.fcm_router import router as fcm_router
 from .grupos.WebSocket.routers import router as ws_grupos_router
+from .seguridad.seguridad import router as seguridad_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -124,6 +126,7 @@ app.include_router(recordatorios_router)
 app.include_router(grupos_router)
 app.include_router(fcm_router)
 app.include_router(ws_grupos_router)
+app.include_router(seguridad_router)
 
 if __name__ == "__main__":
     import uvicorn

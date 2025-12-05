@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
-from ..database import Base
+from ..database.database import Base
 
 class ZonaPeligrosaUsuario(Base):
     """
@@ -11,7 +11,8 @@ class ZonaPeligrosaUsuario(Base):
     __tablename__ = "zonas_peligrosas_usuario"
     
     id = Column(Integer, primary_key=True, index=True)
-    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False, index=True)
+
     
     # Información de la zona
     nombre = Column(String(100), nullable=False)  # "Callejón cerca de casa", "Zona oscura", etc.
