@@ -8,19 +8,10 @@ class ReminderType(PyEnum):
     DATETIME = "datetime"
     BOTH = "both"
 
-
 class TriggerType(PyEnum):
     ENTER = "enter"
     EXIT = "exit"
     BOTH = "both"
-
-
-class SoundType(PyEnum):
-    DEFAULT = "default"
-    GENTLE = "gentle"
-    ALERT = "alert"
-    CHIME = "chime"
-
 
 class Reminder(Base):
     __tablename__ = "reminders"
@@ -32,7 +23,7 @@ class Reminder(Base):
     # Cambiado a String para producción
     reminder_type = Column(String(50), nullable=False)
     trigger_type = Column(String(50), nullable=False)
-    sound_type = Column(String(50), nullable=True)
+    sound_uri = Column(String(500), nullable=True)
 
     vibration = Column(Boolean, default=False)
     sound = Column(Boolean, default=False)
@@ -52,5 +43,5 @@ class Reminder(Base):
     user = relationship("Usuario", back_populates="reminders")
 
     # NUEVOS CAMPOS
-    is_active = Column(Boolean, default=True)  # Para habilitar/deshabilitar
-    is_deleted = Column(Boolean, default=False)  # Para "eliminación lógica"
+    is_active = Column(Boolean, default=True)
+    is_deleted = Column(Boolean, default=False)

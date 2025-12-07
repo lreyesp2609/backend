@@ -26,7 +26,7 @@ class ReminderBase(BaseModel):
     trigger_type: TriggerType
     vibration: bool = False
     sound: bool = False
-    sound_type: Optional[SoundType] = None
+    sound_uri: Optional[str] = None
     
     # ✅ Aceptar string o lista en la entrada
     days: Optional[Union[str, List[str]]] = None
