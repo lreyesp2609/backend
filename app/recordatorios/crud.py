@@ -67,3 +67,36 @@ def list_reminders(db: Session, user_id: int):
         return reminders
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener recordatorios: {str(e)}")
+    
+def update_reminder(db: Session, reminder_id: int, user_id: int, reminder_data: dict):
+    try:
+        reminder = db.query(Reminder).filter_by(
+            id=reminder_id, 
+            user_id=user_id, 
+            is_deleted=False
+        ).first()
+        
+        if not reminder:
+            raise HTTPException(
+                status_code=404, 
+                detail="Recordatorio no encontrado"
+            )
+        
+        # Actualizar solo los campos proporcionados
+        for key, value in reminder_data.items():
+            if value is not None:
+                setattr(reminder, key, value)
+        
+        db.commit()
+        db.refresh(reminder)
+        return reminder
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error al actualizar recordatorio: {str(e)}"
+        )

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from .schemas import ReminderCreate, ReminderOut
+from .schemas import ReminderCreate, ReminderOut, ReminderUpdate
 from .crud import *
 from ..database.database import get_db
 from ..usuarios.security import get_current_user
@@ -46,3 +46,16 @@ def delete_reminder(reminder_id: int, db: Session = Depends(get_db), current_use
     reminder.is_deleted = True
     db.commit()
     return {"detail": "Recordatorio eliminado"}
+
+@router.put("/{reminder_id}/editar", response_model=ReminderOut)
+def edit_reminder(
+    reminder_id: int,
+    reminder_update: ReminderUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    # Convertir a dict y filtrar valores None
+    update_data = reminder_update.dict(exclude_unset=True)
+    
+    updated_reminder = update_reminder(db, reminder_id, current_user.id, update_data)
+    return updated_reminder

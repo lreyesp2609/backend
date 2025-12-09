@@ -82,3 +82,9 @@ class ReminderOut(ReminderBase):
 
     class Config:
         from_attributes = True
+
+class ReminderUpdate(BaseModel):
+    title: Optional[str] = None
+    time: Optional[str] = None
+    days: Optional[list[str]] = None
+    is_active: Optional[bool] = None
