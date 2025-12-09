@@ -85,8 +85,18 @@ class ReminderOut(ReminderBase):
 
 class ReminderUpdate(BaseModel):
     title: Optional[str] = None
+    description: Optional[str] = None
+    reminder_type: Optional[ReminderType] = None
+    trigger_type: Optional[TriggerType] = None
     time: Optional[str] = None
-    days: Optional[Union[str, List[str]]] = None  # 🔥 Acepta ambos
+    days: Optional[Union[str, List[str]]] = None
+    location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    radius: Optional[float] = None
+    vibration: Optional[bool] = None
+    sound: Optional[bool] = None
+    sound_uri: Optional[str] = None 
     is_active: Optional[bool] = None
     
     @field_validator('days')
