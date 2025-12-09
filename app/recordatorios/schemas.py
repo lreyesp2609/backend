@@ -86,5 +86,17 @@ class ReminderOut(ReminderBase):
 class ReminderUpdate(BaseModel):
     title: Optional[str] = None
     time: Optional[str] = None
-    days: Optional[list[str]] = None
+    days: Optional[Union[str, List[str]]] = None  # 🔥 Acepta ambos
     is_active: Optional[bool] = None
+    
+    @field_validator('days')
+    @classmethod
+    def normalize_days(cls, v):
+        """Convertir days a string si viene como lista"""
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ','.join(v)
+        if isinstance(v, str):
+            return v
+        raise ValueError("days debe ser una lista o un string")
