@@ -70,6 +70,9 @@ def list_reminders(db: Session, user_id: int):
     
 def update_reminder(db: Session, reminder_id: int, user_id: int, reminder_data: dict):
     try:
+        # 🔵 LOG AGREGADO
+        print(f"🔵 Buscando reminder_id={reminder_id} para user_id={user_id}")
+        
         reminder = db.query(Reminder).filter_by(
             id=reminder_id, 
             user_id=user_id, 
@@ -82,20 +85,36 @@ def update_reminder(db: Session, reminder_id: int, user_id: int, reminder_data: 
                 detail="Recordatorio no encontrado"
             )
         
+        # 🔵 LOG AGREGADO
+        print(f"🔵 reminder_type ANTES del update: {reminder.reminder_type}")
+        
         # Actualizar solo los campos proporcionados
         for key, value in reminder_data.items():
             if value is not None:
+                # 🔵 LOG AGREGADO
+                print(f"🔵 Actualizando {key} = {value}")
                 setattr(reminder, key, value)
+        
+        # 🔵 LOG AGREGADO
+        print(f"🔵 reminder_type DESPUÉS del setattr: {reminder.reminder_type}")
+        print(f"🔵 Ejecutando db.commit()...")
         
         db.commit()
         db.refresh(reminder)
+        
+        # 🔵 LOG AGREGADO
+        print(f"🔵 reminder_type DESPUÉS del commit: {reminder.reminder_type}")
+        print(f"✅ Reminder actualizado exitosamente")
+        
         return reminder
         
     except HTTPException:
         db.rollback()
+        print(f"❌ HTTPException - Rollback ejecutado")
         raise
     except SQLAlchemyError as e:
         db.rollback()
+        print(f"❌ SQLAlchemyError - Rollback ejecutado: {str(e)}")
         raise HTTPException(
             status_code=500, 
             detail=f"Error al actualizar recordatorio: {str(e)}"

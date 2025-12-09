@@ -57,5 +57,10 @@ def edit_reminder(
     # Convertir a dict y filtrar valores None
     update_data = reminder_update.dict(exclude_unset=True)
     
+    # 🔵 LOGS AGREGADOS
+    print(f"🔵 REQUEST BODY RECIBIDO: {update_data}")
+    print(f"🔵 reminder_type = {update_data.get('reminder_type')}")
+    print(f"🔵 Editando reminder_id = {reminder_id}")
+    
     updated_reminder = update_reminder(db, reminder_id, current_user.id, update_data)
     return updated_reminder
