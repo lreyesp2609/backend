@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware  # 🆕 AGREGAR
 from .database.config import settings
 from .database.database import *
-from .database.relationships import configure_relationships
 from .usuarios.models import *
 from .ubicaciones.models import *
 from .ubicaciones.ubicaciones_historial.models import *
