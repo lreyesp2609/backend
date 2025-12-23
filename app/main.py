@@ -49,28 +49,23 @@ async def startup_event():
     if test_connection():
         logger.info("✅ Base de datos conectada correctamente")
         
-        # PASO 1: Configurar relaciones ANTES de crear tablas
-        configure_relationships()
-        logger.info("✅ Relaciones entre modelos configuradas")
+        # ❌ ELIMINAR ESTA LÍNEA:
+        # configure_relationships()
         
-        # PASO 2: Crear tablas
+        # PASO 1: Crear tablas
         create_tables()
         logger.info("✅ Tablas creadas exitosamente")
         
-        # PASO 3: Crear datos semilla
+        # PASO 2: Crear datos semilla
         db = SessionLocal()
         try:
             create_default_roles_and_admin(db)
             create_default_estados_ubicacion(db)
             
-            # 🔹 Seed de transportes
             from app.ubicaciones.ubicaciones_historial.rutas.models import Transporte
             from app.ubicaciones.ubicaciones_historial.rutas.seed import seed_transportes
             seed_transportes(db)
             logger.info("✅ Transportes creados exitosamente")
-            
-            # ✅ AGREGAR - Inicializar Firebase FCM
-            from app.services.fcm_service import FCMService
             
         finally:
             db.close()

@@ -12,6 +12,14 @@ class UbicacionUsuario(Base):
     longitud = Column(Float, nullable=False)
     direccion_completa = Column(String(255), nullable=True)
     activo = Column(Boolean, default=True)
+    
+    # ✅ AGREGAR ESTAS RELACIONES AQUÍ
     usuario = relationship("Usuario", back_populates="ubicaciones")
+    estados = relationship(
+        "EstadoUbicacionUsuario",
+        back_populates="ubicacion",
+        cascade="all, delete-orphan"
+    )
 
+# ✅ MANTENER ESTA LÍNEA AL FINAL
 Usuario.ubicaciones = relationship("UbicacionUsuario", back_populates="usuario", cascade="all, delete-orphan")
