@@ -49,3 +49,73 @@ class ComportamientoRuta(Base):
     alerta_mostrada = Column(Boolean, default=False)            # ¿Ya se le alertó?
     
     fecha_creacion = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════
+# MODELOS DE BASE DE DATOS
+# ══════════════════════════════════════════════════════════
+
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy.orm import relationship
+from app.database.database import Base
+
+class PuntoGPSRaw(Base):
+    """
+    📍 Puntos GPS crudos grabados en segundo plano
+    Se guardan automáticamente sin que el usuario haga nada
+    """
+    __tablename__ = "puntos_gps_raw"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    latitud = Column(Float, nullable=False)
+    longitud = Column(Float, nullable=False)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    precision_metros = Column(Float, nullable=True)
+    velocidad = Column(Float, nullable=True)
+    
+    __table_args__ = (
+        {'mysql_engine': 'InnoDB'}
+    )
+
+
+class ViajeDetectado(Base):
+    """
+    🚶 Viajes detectados automáticamente
+    Sistema identifica: "Usuario fue de A → B"
+    """
+    __tablename__ = "viajes_detectados"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    ubicacion_origen_id = Column(Integer, ForeignKey("ubicaciones_usuario.id"), nullable=True)
+    ubicacion_destino_id = Column(Integer, ForeignKey("ubicaciones_usuario.id"), nullable=True, index=True)
+    lat_inicio = Column(Float, nullable=False)
+    lon_inicio = Column(Float, nullable=False)
+    lat_fin = Column(Float, nullable=False)
+    lon_fin = Column(Float, nullable=False)
+    fecha_inicio = Column(DateTime, nullable=False, index=True)
+    fecha_fin = Column(DateTime, nullable=False)
+    geometria = Column(Text, nullable=False)
+    distancia_metros = Column(Float, nullable=False)
+    duracion_segundos = Column(Integer, nullable=False)
+    hash_trayectoria = Column(String(64), nullable=True, index=True)
+
+
+class PatronPredictibilidad(Base):
+    """
+    ⚠️ Patrones de predictibilidad detectados
+    """
+    __tablename__ = "patrones_predictibilidad"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    ubicacion_destino_id = Column(Integer, ForeignKey("ubicaciones_usuario.id"), nullable=False)
+    total_viajes = Column(Integer, nullable=False)
+    viajes_ruta_similar = Column(Integer, nullable=False)
+    predictibilidad = Column(Float, nullable=False)
+    es_predecible = Column(Boolean, default=False)
+    notificacion_enviada = Column(Boolean, default=False)
+    fecha_ultima_notificacion = Column(DateTime, nullable=True)
+    fecha_analisis = Column(DateTime, default=datetime.utcnow)
+    fecha_actualizacion = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
