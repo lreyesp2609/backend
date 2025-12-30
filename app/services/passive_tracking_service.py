@@ -396,9 +396,9 @@ class PassiveTrackingService:
     ):
         """Envía notificación FCM sobre predictibilidad detectada"""
         try:
+            from firebase_admin import messaging
             from app.usuarios.models import FCMToken
             from app.ubicaciones.models import UbicacionUsuario
-            from app.services.fcm_service import fcm_service
             
             # 1. Obtener tokens FCM del usuario
             tokens_obj = self.db.query(FCMToken).filter(
@@ -407,10 +407,7 @@ class PassiveTrackingService:
             
             if not tokens_obj:
                 logger.warning(f"⚠️ No hay tokens FCM para usuario {usuario_id}")
-                return
-            
-            tokens = [t.token for t in tokens_obj]
-            logger.info(f"📱 Encontrados {len(tokens)} tokens FCM para usuario {usuario_id}")
+                return None
             
             # 2. Obtener nombre del destino
             destino = self.db.query(UbicacionUsuario).filter(
@@ -420,36 +417,74 @@ class PassiveTrackingService:
             nombre_destino = destino.nombre if destino else "este destino"
             porcentaje = int(predictibilidad * 100)
             
-            # 3. Preparar notificación
+            # 3. Preparar datos de notificación
             titulo = "🎯 Patrón Detectado"
-            mensaje = f"Viajas frecuentemente a {nombre_destino} ({porcentaje}%). ¿Activar tracking automático?"
-            
-            data = {
-                "type": "predictibilidad",
-                "titulo": titulo,
-                "cuerpo": mensaje,
-                "ubicacion_destino_id": str(ubicacion_destino_id),
-                "predictibilidad": str(predictibilidad),
-                "nombre_destino": nombre_destino
-            }
+            cuerpo = f"Viajas frecuentemente a {nombre_destino} ({porcentaje}%). ¿Activar tracking automático?"
             
             logger.info(f"📤 Enviando notificación de predictibilidad...")
             logger.info(f"   Usuario: {usuario_id}")
             logger.info(f"   Destino: {nombre_destino}")
             logger.info(f"   Predictibilidad: {porcentaje}%")
-            logger.info(f"   Tokens: {len(tokens)}")
+            logger.info(f"   Tokens: {len(tokens_obj)}")
             
-            # 4. Enviar notificación
-            resultado = await fcm_service.enviar_a_multiples(
-                tokens=tokens,
-                titulo=titulo,
-                cuerpo=mensaje,
-                data=data
-            )
+            # 4. Enviar uno por uno (sin usar send_multicast)
+            exitosos = 0
+            fallidos = 0
+            tokens_invalidos = []
             
-            logger.info(f"✅ Notificación enviada: {resultado['exitosos']} exitosos, {resultado['fallidos']} fallidos")
+            for token_obj in tokens_obj:
+                try:
+                    logger.info(f"📱 Enviando a token: {token_obj.token[:50]}...")
+                    
+                    # Crear mensaje FCM
+                    message = messaging.Message(
+                        notification=messaging.Notification(
+                            title=titulo,
+                            body=cuerpo
+                        ),
+                        data={
+                            "type": "predictibilidad",
+                            "titulo": titulo,
+                            "cuerpo": cuerpo,
+                            "ubicacion_destino_id": str(ubicacion_destino_id),
+                            "predictibilidad": str(predictibilidad),
+                            "nombre_destino": nombre_destino
+                        },
+                        token=token_obj.token,
+                        android=messaging.AndroidConfig(
+                            priority="high",
+                            notification=messaging.AndroidNotification(
+                                sound="default",
+                                channel_id="recuerdago_mensajes",
+                                color="#2196F3"
+                            )
+                        )
+                    )
+                    
+                    # Enviar
+                    response = messaging.send(message)
+                    exitosos += 1
+                    logger.info(f"✅ Notificación enviada: {response}")
+                    
+                except messaging.UnregisteredError as e:
+                    fallidos += 1
+                    tokens_invalidos.append(token_obj.token)
+                    logger.warning(f"⚠️ Token no registrado: {token_obj.token[:50]}...")
+                    logger.warning(f"   Error: {str(e)}")
+                    
+                except Exception as e:
+                    fallidos += 1
+                    logger.error(f"❌ Error enviando a token {token_obj.token[:50]}...")
+                    logger.error(f"   Error: {str(e)}")
+                    logger.error(f"   Tipo: {type(e).__name__}")
             
-            return resultado
+            logger.info(f"📊 Resumen: {exitosos} exitosos, {fallidos} fallidos")
+            
+            return {
+                "exitosos": exitosos,
+                "fallidos": fallidos,
+                "tokens_invalidos": tokens_invalidos
+            }
             
         except Exception as e:
             logger.error(f"❌ Error enviando notificación de predictibilidad: {e}")
