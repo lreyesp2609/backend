@@ -439,7 +439,6 @@ class PassiveTrackingService:
             from app.usuarios.models import FCMToken
             from app.ubicaciones.models import UbicacionUsuario
             
-            # 1. Obtener tokens FCM del usuario
             tokens_obj = self.db.query(FCMToken).filter(
                 FCMToken.usuario_id == usuario_id
             ).all()
@@ -448,25 +447,19 @@ class PassiveTrackingService:
                 logger.warning(f"⚠️ No hay tokens FCM para usuario {usuario_id}")
                 return None
             
-            # 2. Obtener nombre del destino
             destino = self.db.query(UbicacionUsuario).filter(
                 UbicacionUsuario.id == ubicacion_destino_id
             ).first()
             
             nombre_destino = destino.nombre if destino else "este destino"
-            porcentaje = int(predictibilidad * 100)
             
-            # 🔥 CAMBIO: Título y mensaje más accionable
             titulo = "🚗 Ruta frecuente detectada"
             cuerpo = f"Viajas seguido a {nombre_destino}. Toca aquí para ver rutas alternas y variar tu camino."
             
             logger.info(f"📤 Enviando notificación de rutas alternas...")
             logger.info(f"   Usuario: {usuario_id}")
             logger.info(f"   Destino: {nombre_destino}")
-            logger.info(f"   Predictibilidad: {porcentaje}%")
-            logger.info(f"   Tokens: {len(tokens_obj)}")
             
-            # 3. Enviar notificación
             exitosos = 0
             fallidos = 0
             tokens_invalidos = []
@@ -475,36 +468,49 @@ class PassiveTrackingService:
                 try:
                     logger.info(f"📱 Enviando a token: {token_obj.token[:50]}...")
                     
-                    # 🔥 CAMBIO: Agregar información de navegación
+                    # 🔥 CRÍTICO: Enviar AMBOS notification Y data
                     message = messaging.Message(
+                        # ✅ notification: Para que aparezca cuando la app está cerrada
                         notification=messaging.Notification(
                             title=titulo,
                             body=cuerpo
                         ),
+                        # ✅ data: Para manejar la navegación cuando se toca
                         data={
-                            "type": "generar_rutas",  # ✅ Nuevo tipo
-                            "action": "navigate_to_routes",  # ✅ Acción específica
+                            "type": "generar_rutas",
+                            "action": "navigate_to_routes",
                             "titulo": titulo,
                             "cuerpo": cuerpo,
                             "ubicacion_destino_id": str(ubicacion_destino_id),
                             "ubicacion_nombre": nombre_destino,
                             "predictibilidad": str(predictibilidad),
-                            "screen": "rutas_screen",  # ✅ Pantalla de destino
-                            "destino_id": str(ubicacion_destino_id)  # ✅ Parámetro de navegación
+                            "screen": "rutas_screen",
+                            "destino_id": str(ubicacion_destino_id),
+                            # 🆕 CRÍTICO: Agregar estos campos para navegación
+                            "NAVIGATE_TO_ROUTES": "true",  # Como string, no boolean
+                            "UBICACION_DESTINO_ID": str(ubicacion_destino_id),
+                            "FROM_NOTIFICATION": "true"
                         },
                         token=token_obj.token,
                         android=messaging.AndroidConfig(
                             priority="high",
+                            # 🔥 CRÍTICO: Configuración para que funcione con app cerrada
                             notification=messaging.AndroidNotification(
                                 sound="default",
                                 channel_id="recuerdago_mensajes",
                                 color="#2196F3",
-                                click_action="FLUTTER_NOTIFICATION_CLICK"  # ✅ Para manejar el clic
-                            )
+                                click_action="FLUTTER_NOTIFICATION_CLICK",
+                                # 🆕 Agregar prioridad máxima
+                                priority="max",
+                                # 🆕 Configurar para despertar la app
+                                default_vibrate_timings=False,
+                                vibrate_timings_millis=[0, 300, 200, 300]
+                            ),
+                            # 🆕 CRÍTICO: ttl para asegurar entrega
+                            ttl=3600  # 1 hora
                         )
                     )
                     
-                    # Enviar
                     response = messaging.send(message)
                     exitosos += 1
                     logger.info(f"✅ Notificación enviada: {response}")
