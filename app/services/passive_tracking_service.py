@@ -100,24 +100,46 @@ class PassiveTrackingService:
             raise
     
     def _intentar_detectar_viaje(self, usuario_id: int):
-        """Detecta si se completó un viaje"""
+        """
+        🔥 VERSIÓN CORREGIDA: Solo busca puntos después del último viaje
+        """
         try:
-            hace_una_hora = datetime.utcnow() - timedelta(hours=1)
+            # Buscar el último viaje detectado
+            ultimo_viaje = self.db.query(ViajeDetectado).filter(
+                ViajeDetectado.usuario_id == usuario_id
+            ).order_by(ViajeDetectado.fecha_fin.desc()).first()
+            
+            if ultimo_viaje:
+                # Tomar puntos DESPUÉS del último viaje
+                desde = ultimo_viaje.fecha_fin
+                logger.info(f"📅 Buscando puntos GPS desde último viaje: {desde}")
+            else:
+                # Si no hay viajes previos, usar última hora
+                desde = datetime.utcnow() - timedelta(hours=1)
+                logger.info(f"📅 Primer viaje del usuario, buscando desde: {desde}")
             
             puntos = self.db.query(PuntoGPSRaw).filter(
                 PuntoGPSRaw.usuario_id == usuario_id,
-                PuntoGPSRaw.timestamp >= hace_una_hora
+                PuntoGPSRaw.timestamp >= desde
             ).order_by(PuntoGPSRaw.timestamp).all()
             
+            logger.info(f"📊 Puntos GPS encontrados: {len(puntos)}")
+            
             if len(puntos) < 3:
+                logger.info(f"⏭️ Insuficientes puntos GPS ({len(puntos)} < 3)")
                 return
             
             ultimos_3 = puntos[-3:]
             if self._esta_quieto(ultimos_3):
+                logger.info(f"✅ Usuario quieto detectado, intentando finalizar viaje")
                 self._finalizar_viaje_en_progreso(usuario_id, puntos)
+            else:
+                logger.info(f"🏃 Usuario en movimiento, esperando...")
                 
         except Exception as e:
-            logger.error(f"Error detectando viaje: {e}")
+            logger.error(f"❌ Error detectando viaje: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _esta_quieto(self, puntos: List[PuntoGPSRaw]) -> bool:
         """Verifica si está quieto"""
