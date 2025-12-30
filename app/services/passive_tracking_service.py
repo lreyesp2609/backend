@@ -136,55 +136,105 @@ class PassiveTrackingService:
         return promedio < 30
     
     def _finalizar_viaje_en_progreso(self, usuario_id: int, puntos: List[PuntoGPSRaw]):
-        """Finaliza un viaje detectado"""
+        """
+        🔥 VERSIÓN CORREGIDA: Detecta origen y destino correctamente
+        """
         try:
             if len(puntos) < 3:
                 return
             
-            punto_inicio = puntos[0]
-            punto_fin = puntos[-1]
+            # 🆕 PASO 1: Encontrar el punto donde REALMENTE empezó el movimiento
+            punto_inicio_movimiento = None
+            punto_fin_movimiento = None
             
+            # Buscar el primer punto donde hay movimiento significativo
+            for i in range(len(puntos) - 1):
+                dist = self._calcular_distancia_haversine(
+                    puntos[i].latitud, puntos[i].longitud,
+                    puntos[i+1].latitud, puntos[i+1].longitud
+                )
+                
+                # Si hay movimiento > 50 metros, ese es el punto de inicio real
+                if dist > 50 and punto_inicio_movimiento is None:
+                    punto_inicio_movimiento = puntos[i]
+                    logger.info(f"🚀 Inicio de movimiento detectado en punto {i}: "
+                            f"({puntos[i].latitud}, {puntos[i].longitud})")
+                    break
+            
+            # Si no se detectó movimiento, usar el primer punto
+            if punto_inicio_movimiento is None:
+                punto_inicio_movimiento = puntos[0]
+                logger.warning("⚠️ No se detectó inicio de movimiento claro, usando primer punto")
+            
+            # El punto final es siempre el último (donde está quieto ahora)
+            punto_fin_movimiento = puntos[-1]
+            
+            logger.info(f"📍 Origen detectado: ({punto_inicio_movimiento.latitud}, {punto_inicio_movimiento.longitud})")
+            logger.info(f"📍 Destino detectado: ({punto_fin_movimiento.latitud}, {punto_fin_movimiento.longitud})")
+            
+            # PASO 2: Calcular distancia y duración
             distancia_total = self._calcular_distancia_total_ruta(puntos)
             
             if distancia_total < self.DISTANCIA_MINIMA_VIAJE:
+                logger.info(f"⏭️ Viaje descartado: distancia {distancia_total:.0f}m < {self.DISTANCIA_MINIMA_VIAJE}m")
                 return
             
-            duracion = (punto_fin.timestamp - punto_inicio.timestamp).total_seconds()
+            duracion = (punto_fin_movimiento.timestamp - punto_inicio_movimiento.timestamp).total_seconds()
             
             if duracion < self.TIEMPO_MINIMO_VIAJE:
+                logger.info(f"⏭️ Viaje descartado: duración {duracion:.0f}s < {self.TIEMPO_MINIMO_VIAJE}s")
                 return
             
-            # Verificar si ya existe
+            # PASO 3: Verificar si ya existe
             existente = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id,
-                ViajeDetectado.fecha_inicio == punto_inicio.timestamp
+                ViajeDetectado.fecha_inicio == punto_inicio_movimiento.timestamp
             ).first()
             
             if existente:
+                logger.info(f"⏭️ Viaje ya existe con fecha_inicio {punto_inicio_movimiento.timestamp}")
                 return
             
-            # Buscar coincidencia con destinos
+            # 🔥 PASO 4: Buscar ubicaciones cercanas (CORREGIDO)
+            # Origen = donde EMPEZASTE el movimiento
             ubicacion_origen_id = self._buscar_destino_cercano(
-                usuario_id, punto_inicio.latitud, punto_inicio.longitud
+                usuario_id, 
+                punto_inicio_movimiento.latitud, 
+                punto_inicio_movimiento.longitud
             )
             
+            # Destino = donde TERMINASTE el movimiento (donde estás ahora)
             ubicacion_destino_id = self._buscar_destino_cercano(
-                usuario_id, punto_fin.latitud, punto_fin.longitud
+                usuario_id, 
+                punto_fin_movimiento.latitud, 
+                punto_fin_movimiento.longitud
             )
             
+            # Logging detallado
+            if ubicacion_origen_id:
+                logger.info(f"✅ Origen identificado: Ubicación ID {ubicacion_origen_id}")
+            else:
+                logger.info(f"❓ Origen desconocido (no hay ubicación cercana)")
+            
+            if ubicacion_destino_id:
+                logger.info(f"✅ Destino identificado: Ubicación ID {ubicacion_destino_id}")
+            else:
+                logger.info(f"❓ Destino desconocido (no hay ubicación cercana)")
+            
+            # PASO 5: Crear viaje
             geometria = self._simplificar_geometria(puntos)
             hash_trayectoria = self._calcular_hash_trayectoria(geometria)
             
             viaje = ViajeDetectado(
                 usuario_id=usuario_id,
-                ubicacion_origen_id=ubicacion_origen_id,
-                ubicacion_destino_id=ubicacion_destino_id,
-                lat_inicio=punto_inicio.latitud,
-                lon_inicio=punto_inicio.longitud,
-                lat_fin=punto_fin.latitud,
-                lon_fin=punto_fin.longitud,
-                fecha_inicio=punto_inicio.timestamp,
-                fecha_fin=punto_fin.timestamp,
+                ubicacion_origen_id=ubicacion_origen_id,     # ✅ Donde empezaste
+                ubicacion_destino_id=ubicacion_destino_id,   # ✅ Donde llegaste
+                lat_inicio=punto_inicio_movimiento.latitud,
+                lon_inicio=punto_inicio_movimiento.longitud,
+                lat_fin=punto_fin_movimiento.latitud,
+                lon_fin=punto_fin_movimiento.longitud,
+                fecha_inicio=punto_inicio_movimiento.timestamp,
+                fecha_fin=punto_fin_movimiento.timestamp,
                 geometria=geometria,
                 distancia_metros=distancia_total,
                 duracion_segundos=int(duracion),
@@ -195,13 +245,25 @@ class PassiveTrackingService:
             self.db.commit()
             self.db.refresh(viaje)
             
-            logger.info(f"🚶 Viaje detectado: {distancia_total:.0f}m, {duracion:.0f}s")
+            logger.info(f"🚶 ═══════════════════════════════════════")
+            logger.info(f"🚶 VIAJE DETECTADO Y GUARDADO")
+            logger.info(f"🚶 ═══════════════════════════════════════")
+            logger.info(f"   ID: {viaje.id}")
+            logger.info(f"   Origen: {'Ubicación ' + str(ubicacion_origen_id) if ubicacion_origen_id else 'Desconocido'}")
+            logger.info(f"   Destino: {'Ubicación ' + str(ubicacion_destino_id) if ubicacion_destino_id else 'Desconocido'}")
+            logger.info(f"   Distancia: {distancia_total:.0f}m")
+            logger.info(f"   Duración: {duracion:.0f}s ({duracion/60:.1f} min)")
+            logger.info(f"🚶 ═══════════════════════════════════════")
             
+            # PASO 6: Analizar predictibilidad si llegaste a un destino conocido
             if ubicacion_destino_id:
+                logger.info(f"📊 Analizando predictibilidad para destino {ubicacion_destino_id}")
                 self._analizar_predictibilidad_destino(usuario_id, ubicacion_destino_id)
             
         except Exception as e:
-            logger.error(f"Error finalizando viaje: {e}")
+            logger.error(f"❌ Error finalizando viaje: {e}")
+            import traceback
+            traceback.print_exc()
             self.db.rollback()
     
     def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
