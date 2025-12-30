@@ -12,6 +12,7 @@ from ..database.database import get_db
 from ..usuarios.security import get_current_user
 from ..services.passive_tracking_service import PassiveTrackingService
 from .schemas import *
+from ..services.passive_tracking_service import PatronPredictibilidad
 
 import logging
 logger = logging.getLogger(__name__)
@@ -310,3 +311,39 @@ async def resetear_notificacion_patron(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.post("/debug/forzar-notificacion/{usuario_id}/{ubicacion_destino_id}")
+def forzar_notificacion_predictibilidad(
+    usuario_id: int,
+    ubicacion_destino_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    🔧 DEBUG: Forzar envío de notificación de predictibilidad
+    """
+    patron = db.query(PatronPredictibilidad).filter(
+        PatronPredictibilidad.usuario_id == usuario_id,
+        PatronPredictibilidad.ubicacion_destino_id == ubicacion_destino_id
+    ).first()
+    
+    if not patron:
+        return {"error": "Patrón no encontrado"}
+    
+    service = PassiveTrackingService(db)
+    service._enviar_notificacion_predictibilidad(
+        usuario_id, 
+        ubicacion_destino_id, 
+        patron.predictibilidad
+    )
+    
+    # Marcar como enviada
+    patron.notificacion_enviada = True
+    patron.fecha_ultima_notificacion = datetime.utcnow()
+    db.commit()
+    
+    return {
+        "success": True, 
+        "message": "Notificación enviada",
+        "predictibilidad": patron.predictibilidad
+    }
