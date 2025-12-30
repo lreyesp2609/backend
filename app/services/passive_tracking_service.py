@@ -22,9 +22,10 @@ class PassiveTrackingService:
     📍 Servicio de tracking GPS pasivo
     """
     
-    DISTANCIA_MINIMA_VIAJE = 200
-    TIEMPO_MINIMO_VIAJE = 120
+    DISTANCIA_MINIMA_VIAJE = 50      # metros (ajustar a 200 en producción)
+    TIEMPO_MINIMO_VIAJE = 30         # segundos (ajustar a 120 en producción)
     RADIO_DESTINO_METROS = 100
+    PUNTOS_QUIETO_REQUERIDOS = 6
     UMBRAL_SIMILITUD_TRAYECTORIA = 0.75
     MIN_VIAJES_ANALISIS = 5
     UMBRAL_PREDICTIBILIDAD = 0.70
@@ -98,64 +99,56 @@ class PassiveTrackingService:
             logger.error(f"Error en guardar_lote_puntos_gps: {e}")
             self.db.rollback()
             raise
+
+    def _esta_quieto(self, puntos: List[PuntoGPSRaw]) -> bool:
+        """Verifica si está quieto con más certeza"""
+        if len(puntos) < self.PUNTOS_QUIETO_REQUERIDOS:
+            return False
+        
+        ultimos = puntos[-self.PUNTOS_QUIETO_REQUERIDOS:]
+        distancias = []
+        
+        for i in range(len(ultimos) - 1):
+            dist = self._calcular_distancia_haversine(
+                ultimos[i].latitud, ultimos[i].longitud,
+                ultimos[i+1].latitud, ultimos[i+1].longitud
+            )
+            distancias.append(dist)
+        
+        promedio = sum(distancias) / len(distancias)
+        logger.info(f"📏 Distancia promedio últimos {self.PUNTOS_QUIETO_REQUERIDOS} puntos: {promedio:.1f}m")
+        return promedio < 30
     
     def _intentar_detectar_viaje(self, usuario_id: int):
-        """
-        🔥 VERSIÓN CORREGIDA: Solo busca puntos después del último viaje
-        """
         try:
-            # Buscar el último viaje detectado
             ultimo_viaje = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id
             ).order_by(ViajeDetectado.fecha_fin.desc()).first()
             
             if ultimo_viaje:
-                # Tomar puntos DESPUÉS del último viaje
                 desde = ultimo_viaje.fecha_fin
-                logger.info(f"📅 Buscando puntos GPS desde último viaje: {desde}")
             else:
-                # Si no hay viajes previos, usar última hora
-                desde = datetime.utcnow() - timedelta(hours=1)
-                logger.info(f"📅 Primer viaje del usuario, buscando desde: {desde}")
+                desde = datetime.utcnow() - timedelta(hours=2)
             
             puntos = self.db.query(PuntoGPSRaw).filter(
                 PuntoGPSRaw.usuario_id == usuario_id,
                 PuntoGPSRaw.timestamp >= desde
             ).order_by(PuntoGPSRaw.timestamp).all()
             
-            logger.info(f"📊 Puntos GPS encontrados: {len(puntos)}")
+            logger.info(f"📊 Puntos GPS: {len(puntos)} desde {desde}")
             
-            if len(puntos) < 3:
-                logger.info(f"⏭️ Insuficientes puntos GPS ({len(puntos)} < 3)")
+            if len(puntos) < self.PUNTOS_QUIETO_REQUERIDOS:
+                logger.info(f"⏭️ Insuficientes puntos ({len(puntos)} < {self.PUNTOS_QUIETO_REQUERIDOS})")
                 return
             
-            ultimos_3 = puntos[-3:]
-            if self._esta_quieto(ultimos_3):
-                logger.info(f"✅ Usuario quieto detectado, intentando finalizar viaje")
+            if self._esta_quieto(puntos):
+                logger.info(f"✅ Usuario quieto confirmado, finalizando viaje")
                 self._finalizar_viaje_en_progreso(usuario_id, puntos)
             else:
-                logger.info(f"🏃 Usuario en movimiento, esperando...")
+                logger.info(f"🏃 Usuario en movimiento, acumulando puntos...")
                 
         except Exception as e:
             logger.error(f"❌ Error detectando viaje: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def _esta_quieto(self, puntos: List[PuntoGPSRaw]) -> bool:
-        """Verifica si está quieto"""
-        if len(puntos) < 2:
-            return False
-        
-        distancias = []
-        for i in range(len(puntos) - 1):
-            dist = self._calcular_distancia_haversine(
-                puntos[i].latitud, puntos[i].longitud,
-                puntos[i+1].latitud, puntos[i+1].longitud
-            )
-            distancias.append(dist)
-        
-        promedio = sum(distancias) / len(distancias)
-        return promedio < 30
     
     def _finalizar_viaje_en_progreso(self, usuario_id: int, puntos: List[PuntoGPSRaw]):
         """
@@ -167,7 +160,6 @@ class PassiveTrackingService:
             
             # 🆕 PASO 1: Encontrar el punto donde REALMENTE empezó el movimiento
             punto_inicio_movimiento = None
-            punto_fin_movimiento = None
             
             # Buscar el primer punto donde hay movimiento significativo
             for i in range(len(puntos) - 1):
@@ -194,38 +186,44 @@ class PassiveTrackingService:
             logger.info(f"📍 Origen detectado: ({punto_inicio_movimiento.latitud}, {punto_inicio_movimiento.longitud})")
             logger.info(f"📍 Destino detectado: ({punto_fin_movimiento.latitud}, {punto_fin_movimiento.longitud})")
             
-            # PASO 2: Calcular distancia y duración
+            # ✅ PASO 2: Calcular distancia y duración
             distancia_total = self._calcular_distancia_total_ruta(puntos)
             
             if distancia_total < self.DISTANCIA_MINIMA_VIAJE:
                 logger.info(f"⏭️ Viaje descartado: distancia {distancia_total:.0f}m < {self.DISTANCIA_MINIMA_VIAJE}m")
                 return
             
-            duracion = (punto_fin_movimiento.timestamp - punto_inicio_movimiento.timestamp).total_seconds()
+            # 🔥 CORREGIDO: Duración desde el PRIMER punto hasta el ÚLTIMO
+            duracion = (puntos[-1].timestamp - puntos[0].timestamp).total_seconds()
+            
+            logger.info(f"⏱️ Duración calculada: {duracion:.0f}s ({duracion/60:.1f} min)")
+            logger.info(f"   Desde: {puntos[0].timestamp}")
+            logger.info(f"   Hasta: {puntos[-1].timestamp}")
             
             if duracion < self.TIEMPO_MINIMO_VIAJE:
                 logger.info(f"⏭️ Viaje descartado: duración {duracion:.0f}s < {self.TIEMPO_MINIMO_VIAJE}s")
                 return
             
             # PASO 3: Verificar si ya existe
+            # ⚠️ Verificar por el PRIMER punto, no por donde empezó el movimiento
             existente = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id,
-                ViajeDetectado.fecha_inicio == punto_inicio_movimiento.timestamp
+                ViajeDetectado.fecha_inicio == puntos[0].timestamp  # ✅ Primer punto
             ).first()
             
             if existente:
-                logger.info(f"⏭️ Viaje ya existe con fecha_inicio {punto_inicio_movimiento.timestamp}")
+                logger.info(f"⏭️ Viaje ya existe con fecha_inicio {puntos[0].timestamp}")
                 return
             
-            # 🔥 PASO 4: Buscar ubicaciones cercanas (CORREGIDO)
-            # Origen = donde EMPEZASTE el movimiento
+            # 🔥 PASO 4: Buscar ubicaciones cercanas
+            # Origen = donde estabas al inicio (primer punto con movimiento)
             ubicacion_origen_id = self._buscar_destino_cercano(
                 usuario_id, 
                 punto_inicio_movimiento.latitud, 
                 punto_inicio_movimiento.longitud
             )
             
-            # Destino = donde TERMINASTE el movimiento (donde estás ahora)
+            # Destino = donde terminaste (último punto)
             ubicacion_destino_id = self._buscar_destino_cercano(
                 usuario_id, 
                 punto_fin_movimiento.latitud, 
@@ -249,14 +247,14 @@ class PassiveTrackingService:
             
             viaje = ViajeDetectado(
                 usuario_id=usuario_id,
-                ubicacion_origen_id=ubicacion_origen_id,     # ✅ Donde empezaste
-                ubicacion_destino_id=ubicacion_destino_id,   # ✅ Donde llegaste
+                ubicacion_origen_id=ubicacion_origen_id,
+                ubicacion_destino_id=ubicacion_destino_id,
                 lat_inicio=punto_inicio_movimiento.latitud,
                 lon_inicio=punto_inicio_movimiento.longitud,
                 lat_fin=punto_fin_movimiento.latitud,
                 lon_fin=punto_fin_movimiento.longitud,
-                fecha_inicio=punto_inicio_movimiento.timestamp,
-                fecha_fin=punto_fin_movimiento.timestamp,
+                fecha_inicio=puntos[0].timestamp,           # ✅ Primer punto
+                fecha_fin=puntos[-1].timestamp,             # ✅ Último punto
                 geometria=geometria,
                 distancia_metros=distancia_total,
                 duracion_segundos=int(duracion),
@@ -275,6 +273,7 @@ class PassiveTrackingService:
             logger.info(f"   Destino: {'Ubicación ' + str(ubicacion_destino_id) if ubicacion_destino_id else 'Desconocido'}")
             logger.info(f"   Distancia: {distancia_total:.0f}m")
             logger.info(f"   Duración: {duracion:.0f}s ({duracion/60:.1f} min)")
+            logger.info(f"   Total puntos: {len(puntos)}")
             logger.info(f"🚶 ═══════════════════════════════════════")
             
             # PASO 6: Analizar predictibilidad si llegaste a un destino conocido
