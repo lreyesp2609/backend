@@ -26,9 +26,9 @@ class PassiveTrackingService:
     TIEMPO_MINIMO_VIAJE = 30         # segundos (ajustar a 120 en producción)
     RADIO_DESTINO_METROS = 100
     PUNTOS_QUIETO_REQUERIDOS = 6
-    UMBRAL_SIMILITUD_TRAYECTORIA = 0.75
+    UMBRAL_SIMILITUD_TRAYECTORIA = 0.50
     MIN_VIAJES_ANALISIS = 5
-    UMBRAL_PREDICTIBILIDAD = 0.70
+    UMBRAL_PREDICTIBILIDAD = 0.60
     
     def __init__(self, db: Session):
         self.db = db
@@ -358,7 +358,9 @@ class PassiveTrackingService:
         return grupos
     
     def _calcular_similitud_trayectorias(self, geometria1: str, geometria2: str) -> float:
-        """Calcula similitud entre trayectorias"""
+        """
+        Calcula similitud entre trayectorias con mayor tolerancia a variaciones GPS
+        """
         try:
             puntos1 = self._parsear_geometria(geometria1)
             puntos2 = self._parsear_geometria(geometria2)
@@ -366,28 +368,56 @@ class PassiveTrackingService:
             if not puntos1 or not puntos2:
                 return 0.0
             
+            # 🔥 MEJORA 1: Comparar solo origen y destino primero
+            # Si el origen y destino son similares, ya hay alta similitud
+            dist_origen = self._calcular_distancia_haversine(
+                puntos1[0][0], puntos1[0][1],
+                puntos2[0][0], puntos2[0][1]
+            )
+            
+            dist_destino = self._calcular_distancia_haversine(
+                puntos1[-1][0], puntos1[-1][1],
+                puntos2[-1][0], puntos2[-1][1]
+            )
+            
+            # Si origen Y destino están a menos de 50m, considerar similar (0.8)
+            if dist_origen < 50 and dist_destino < 50:
+                logger.info(f"   ✅ Origen/destino similares: origen={dist_origen:.1f}m, destino={dist_destino:.1f}m")
+                similitud_base = 0.8
+            else:
+                similitud_base = 0.0
+            
+            # 🔥 MEJORA 2: Comparar puntos intermedios con más tolerancia
             distancias = []
-            n_puntos = min(len(puntos1), len(puntos2), 10)
+            n_puntos = min(len(puntos1), len(puntos2), 5)  # ✅ Reducir a 5 puntos de muestreo
             
-            indices1 = [int(i * len(puntos1) / n_puntos) for i in range(n_puntos)]
-            indices2 = [int(i * len(puntos2) / n_puntos) for i in range(n_puntos)]
+            if n_puntos > 2:
+                indices1 = [int(i * (len(puntos1) - 1) / (n_puntos - 1)) for i in range(n_puntos)]
+                indices2 = [int(i * (len(puntos2) - 1) / (n_puntos - 1)) for i in range(n_puntos)]
+                
+                for i1, i2 in zip(indices1, indices2):
+                    dist = self._calcular_distancia_haversine(
+                        puntos1[i1][0], puntos1[i1][1],
+                        puntos2[i2][0], puntos2[i2][1]
+                    )
+                    distancias.append(dist)
+                
+                # Calcular similitud con más tolerancia (150m en vez de 100m)
+                distancia_promedio = sum(distancias) / len(distancias)
+                similitud_ruta = max(0.0, 1.0 - (distancia_promedio / 150.0))  # ✅ 150m de tolerancia
+                
+                # Combinar similitud base con similitud de ruta
+                similitud_final = (similitud_base + similitud_ruta) / 2
+            else:
+                similitud_final = similitud_base
             
-            for i1, i2 in zip(indices1, indices2):
-                dist = self._calcular_distancia_haversine(
-                    puntos1[i1][0], puntos1[i1][1],
-                    puntos2[i2][0], puntos2[i2][1]
-                )
-                distancias.append(dist)
-            
-            distancia_promedio = sum(distancias) / len(distancias)
-            similitud = max(0.0, 1.0 - (distancia_promedio / 100.0))
-            
-            return similitud
+            logger.info(f"   📏 Similitud calculada: {similitud_final*100:.1f}%")
+            return similitud_final
             
         except Exception as e:
             logger.error(f"Error calculando similitud: {e}")
             return 0.0
-    
+        
     async def _enviar_notificacion_predictibilidad(
         self,
         usuario_id: int,

@@ -312,6 +312,41 @@ async def resetear_notificacion_patron(
             detail=str(e)
         )
 
+@router.post("/debug/reanalizar-patron/{usuario_id}/{ubicacion_destino_id}")
+async def reanalizar_patron(
+    usuario_id: int,
+    ubicacion_destino_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    🔧 DEBUG: Re-analizar predictibilidad con algoritmo actualizado
+    """
+    try:
+        service = PassiveTrackingService(db)
+        
+        # Llamar al método de análisis
+        await service._analizar_predictibilidad_destino(usuario_id, ubicacion_destino_id)
+        
+        # Obtener el patrón actualizado
+        patron = db.query(PatronPredictibilidad).filter(
+            PatronPredictibilidad.usuario_id == usuario_id,
+            PatronPredictibilidad.ubicacion_destino_id == ubicacion_destino_id
+        ).first()
+        
+        return {
+            "success": True,
+            "predictibilidad": patron.predictibilidad if patron else None,
+            "es_predecible": patron.es_predecible if patron else None,
+            "viajes_similares": patron.viajes_ruta_similar if patron else None,
+            "total_viajes": patron.total_viajes if patron else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error re-analizando patrón: {e}")
+        return {"error": str(e)}
+        
+
 @router.post("/debug/forzar-notificacion/{usuario_id}/{ubicacion_destino_id}")
 async def forzar_notificacion_predictibilidad(  # ✅ async aquí
     usuario_id: int,
