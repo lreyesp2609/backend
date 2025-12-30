@@ -80,7 +80,8 @@ async def guardar_lote_puntos_gps(
     try:
         service = PassiveTrackingService(db)
         
-        cantidad = service.guardar_lote_puntos_gps(
+        # ✅ AGREGAR await
+        cantidad = await service.guardar_lote_puntos_gps(
             usuario_id=current_user.id,
             puntos=request.puntos
         )
@@ -97,7 +98,6 @@ async def guardar_lote_puntos_gps(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error guardando lote: {str(e)}"
         )
-
 
 @router.get("/viajes", response_model=List[ViajeDetectadoResponse])
 async def obtener_mis_viajes(
@@ -313,7 +313,7 @@ async def resetear_notificacion_patron(
         )
 
 @router.post("/debug/forzar-notificacion/{usuario_id}/{ubicacion_destino_id}")
-def forzar_notificacion_predictibilidad(
+async def forzar_notificacion_predictibilidad(  # ✅ async aquí
     usuario_id: int,
     ubicacion_destino_id: int,
     db: Session = Depends(get_db),
@@ -331,7 +331,9 @@ def forzar_notificacion_predictibilidad(
         return {"error": "Patrón no encontrado"}
     
     service = PassiveTrackingService(db)
-    service._enviar_notificacion_predictibilidad(
+    
+    # ✅ AGREGAR await
+    resultado = await service._enviar_notificacion_predictibilidad(
         usuario_id, 
         ubicacion_destino_id, 
         patron.predictibilidad
@@ -345,5 +347,6 @@ def forzar_notificacion_predictibilidad(
     return {
         "success": True, 
         "message": "Notificación enviada",
-        "predictibilidad": patron.predictibilidad
+        "predictibilidad": patron.predictibilidad,
+        "resultado_fcm": resultado
     }

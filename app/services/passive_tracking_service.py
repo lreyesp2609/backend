@@ -33,35 +33,21 @@ class PassiveTrackingService:
     def __init__(self, db: Session):
         self.db = db
     
-    def guardar_lote_puntos_gps(
+    async def guardar_lote_puntos_gps(  # ✅ async aquí
         self,
         usuario_id: int,
-        puntos: List  # Puede ser List[PuntoGPSBatchItem] o List[Dict]
+        puntos: List
     ) -> int:
         """
         📦 Guarda múltiples puntos GPS en un solo request
-        
-        Args:
-            usuario_id: ID del usuario
-            puntos: Lista de objetos PuntoGPSBatchItem con:
-                    - lat: float
-                    - lon: float
-                    - timestamp: str (ISO format)
-                    - precision: Optional[float]
-                    - velocidad: Optional[float]
-        
-        Returns:
-            Cantidad de puntos guardados exitosamente
         """
         try:
             puntos_guardados = 0
             
             for punto_data in puntos:
                 try:
-                    # 🔧 Acceder como atributo de objeto Pydantic, no como dict
                     timestamp_str = punto_data.timestamp if hasattr(punto_data, 'timestamp') else None
                     
-                    # Parsear timestamp si viene como string
                     if timestamp_str and isinstance(timestamp_str, str):
                         timestamp = datetime.fromisoformat(
                             timestamp_str.replace('Z', '+00:00')
@@ -85,11 +71,10 @@ class PassiveTrackingService:
                     logger.error(f"Error guardando punto individual: {e}")
                     continue
             
-            # Commit todos los puntos
             self.db.commit()
             
-            # Intentar detectar viaje con los puntos nuevos
-            self._intentar_detectar_viaje(usuario_id)
+            # ✅ Con await
+            await self._intentar_detectar_viaje(usuario_id)
             
             logger.info(f"📦 {puntos_guardados} puntos GPS guardados para usuario {usuario_id}")
             
@@ -119,7 +104,7 @@ class PassiveTrackingService:
         logger.info(f"📏 Distancia promedio últimos {self.PUNTOS_QUIETO_REQUERIDOS} puntos: {promedio:.1f}m")
         return promedio < 30
     
-    def _intentar_detectar_viaje(self, usuario_id: int):
+    async def _intentar_detectar_viaje(self, usuario_id: int):
         try:
             ultimo_viaje = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id
@@ -143,14 +128,14 @@ class PassiveTrackingService:
             
             if self._esta_quieto(puntos):
                 logger.info(f"✅ Usuario quieto confirmado, finalizando viaje")
-                self._finalizar_viaje_en_progreso(usuario_id, puntos)
+                await self._finalizar_viaje_en_progreso(usuario_id, puntos)  # ✅ Con await
             else:
                 logger.info(f"🏃 Usuario en movimiento, acumulando puntos...")
                 
         except Exception as e:
             logger.error(f"❌ Error detectando viaje: {e}")
     
-    def _finalizar_viaje_en_progreso(self, usuario_id: int, puntos: List[PuntoGPSRaw]):
+    async def _finalizar_viaje_en_progreso(self, usuario_id: int, puntos: List[PuntoGPSRaw]):
         """
         🔥 VERSIÓN CORREGIDA: Detecta origen y destino correctamente
         """
@@ -287,7 +272,7 @@ class PassiveTrackingService:
             traceback.print_exc()
             self.db.rollback()
     
-    def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
+    async def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
         """Analiza predictibilidad"""
         try:
             viajes = self.db.query(ViajeDetectado).filter(
@@ -333,8 +318,13 @@ class PassiveTrackingService:
             
             self.db.commit()
             
+            # ✅ AHORA SÍ FUNCIONA EL await
             if es_predecible and not patron.notificacion_enviada:
-                self._enviar_notificacion_predictibilidad(usuario_id, ubicacion_destino_id, predictibilidad)
+                await self._enviar_notificacion_predictibilidad(
+                    usuario_id, 
+                    ubicacion_destino_id, 
+                    patron.predictibilidad
+                )
                 patron.notificacion_enviada = True
                 patron.fecha_ultima_notificacion = datetime.utcnow()
                 self.db.commit()
@@ -398,56 +388,85 @@ class PassiveTrackingService:
             logger.error(f"Error calculando similitud: {e}")
             return 0.0
     
-    def _enviar_notificacion_predictibilidad(
+    async def _enviar_notificacion_predictibilidad(
         self,
         usuario_id: int,
         ubicacion_destino_id: int,
         predictibilidad: float
     ):
-        """Envía notificación FCM"""
+        """Envía notificación FCM sobre predictibilidad detectada"""
         try:
             from app.usuarios.models import FCMToken
             from app.ubicaciones.models import UbicacionUsuario
             from app.services.fcm_service import fcm_service
             
+            # 1. Obtener tokens FCM del usuario
             tokens_obj = self.db.query(FCMToken).filter(
-                FCMToken.usuario_id == usuario_id
+                FCMToken.usuario_id == usuario_id,
+                FCMToken.activo == True  # ✅ Solo tokens activos
             ).all()
             
             if not tokens_obj:
+                logger.warning(f"⚠️ No hay tokens FCM activos para usuario {usuario_id}")
                 return
             
             tokens = [t.token for t in tokens_obj]
+            logger.info(f"📱 Encontrados {len(tokens)} tokens FCM para usuario {usuario_id}")
             
+            # 2. Obtener nombre del destino
             destino = self.db.query(UbicacionUsuario).filter(
                 UbicacionUsuario.id == ubicacion_destino_id
             ).first()
             
-            nombre_destino = destino.nombre if destino else "ese destino"
+            nombre_destino = destino.nombre if destino else "este destino"
+            porcentaje = int(predictibilidad * 100)
             
-            titulo = f"⚠️ Patrón detectado"
-            mensaje = (f"Detectamos que siempre usas la misma ruta a {nombre_destino} "
-                      f"({predictibilidad*100:.0f}% de las veces). "
-                      f"Por seguridad, te sugerimos variar tus trayectos.")
+            # 3. Preparar notificación
+            titulo = "🎯 Patrón Detectado"
+            mensaje = f"Viajas frecuentemente a {nombre_destino} ({porcentaje}%). ¿Activar tracking automático?"
             
             data = {
-                "type": "patron_predictibilidad",
+                "type": "predictibilidad",  # ✅ Debe coincidir con Android
+                "titulo": titulo,
+                "cuerpo": mensaje,
                 "ubicacion_destino_id": str(ubicacion_destino_id),
-                "predictibilidad": str(round(predictibilidad * 100, 1))
+                "predictibilidad": str(predictibilidad),
+                "nombre_destino": nombre_destino
             }
             
-            resultado = fcm_service.enviar_a_multiples_sync(
+            logger.info(f"📤 Enviando notificación de predictibilidad...")
+            logger.info(f"   Usuario: {usuario_id}")
+            logger.info(f"   Destino: {nombre_destino}")
+            logger.info(f"   Predictibilidad: {porcentaje}%")
+            logger.info(f"   Tokens: {len(tokens)}")
+            
+            # 4. Enviar notificación (método ASYNC)
+            resultado = await fcm_service.enviar_a_multiples(
                 tokens=tokens,
                 titulo=titulo,
                 cuerpo=mensaje,
                 data=data
             )
             
-            logger.warning(f"⚠️ PREDICTIBILIDAD: Usuario {usuario_id}, {predictibilidad*100:.1f}%")
+            logger.info(f"✅ Notificación enviada: {resultado['exitosos']} exitosos, {resultado['fallidos']} fallidos")
+            
+            # 5. Limpiar tokens inválidos
+            if resultado.get('tokens_invalidos'):
+                for token_invalido in resultado['tokens_invalidos']:
+                    self.db.query(FCMToken).filter(
+                        FCMToken.token == token_invalido
+                    ).update({"activo": False})
+                self.db.commit()
+                logger.info(f"🗑️ {len(resultado['tokens_invalidos'])} tokens marcados como inactivos")
+            
+            return resultado
             
         except Exception as e:
-            logger.error(f"Error enviando notificación: {e}")
-    
+            logger.error(f"❌ Error enviando notificación de predictibilidad: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        
     # Funciones auxiliares
     def _buscar_destino_cercano(self, usuario_id: int, lat: float, lon: float) -> Optional[int]:
         from app.ubicaciones.models import UbicacionUsuario
