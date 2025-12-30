@@ -309,7 +309,7 @@ class PassiveTrackingService:
             logger.error(f"Error calculando similitud: {e}")
             return 0.0
     
-    async def _enviar_notificacion_predictibilidad(
+    def _enviar_notificacion_predictibilidad(
         self,
         usuario_id: int,
         ubicacion_destino_id: int,
@@ -347,7 +347,7 @@ class PassiveTrackingService:
                 "predictibilidad": str(round(predictibilidad * 100, 1))
             }
             
-            resultado = await fcm_service.enviar_a_multiples(
+            resultado = fcm_service.enviar_a_multiples_sync(
                 tokens=tokens,
                 titulo=titulo,
                 cuerpo=mensaje,
