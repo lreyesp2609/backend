@@ -272,7 +272,7 @@ class PassiveTrackingService:
             traceback.print_exc()
             self.db.rollback()
     
-    async def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
+    def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
         """Analiza predictibilidad"""
         try:
             viajes = self.db.query(ViajeDetectado).filter(
@@ -320,10 +320,14 @@ class PassiveTrackingService:
             
             # ✅ AHORA SÍ FUNCIONA EL await
             if es_predecible and not patron.notificacion_enviada:
-                await self._enviar_notificacion_predictibilidad(
-                    usuario_id, 
-                    ubicacion_destino_id, 
-                    patron.predictibilidad
+            # 🔥 Crear tarea asíncrona en background
+                import asyncio
+                asyncio.create_task(
+                    self._enviar_notificacion_predictibilidad(
+                        usuario_id, 
+                        ubicacion_destino_id, 
+                        patron.predictibilidad
+                    )
                 )
                 patron.notificacion_enviada = True
                 patron.fecha_ultima_notificacion = datetime.utcnow()
