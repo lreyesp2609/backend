@@ -359,7 +359,7 @@ class PassiveTrackingService:
     
     def _calcular_similitud_trayectorias(self, geometria1: str, geometria2: str) -> float:
         """
-        Calcula similitud entre trayectorias con mayor tolerancia a variaciones GPS
+        Calcula similitud entre trayectorias COMPLETAS (incluyendo camino intermedio)
         """
         try:
             puntos1 = self._parsear_geometria(geometria1)
@@ -368,8 +368,7 @@ class PassiveTrackingService:
             if not puntos1 or not puntos2:
                 return 0.0
             
-            # 🔥 MEJORA 1: Comparar solo origen y destino primero
-            # Si el origen y destino son similares, ya hay alta similitud
+            # 1️⃣ Comparar origen y destino (como antes)
             dist_origen = self._calcular_distancia_haversine(
                 puntos1[0][0], puntos1[0][1],
                 puntos2[0][0], puntos2[0][1]
@@ -380,21 +379,23 @@ class PassiveTrackingService:
                 puntos2[-1][0], puntos2[-1][1]
             )
             
-            # Si origen Y destino están a menos de 50m, considerar similar (0.8)
+            # Si origen Y destino están cerca (< 50m)
             if dist_origen < 50 and dist_destino < 50:
                 logger.info(f"   ✅ Origen/destino similares: origen={dist_origen:.1f}m, destino={dist_destino:.1f}m")
                 similitud_base = 0.8
             else:
                 similitud_base = 0.0
             
-            # 🔥 MEJORA 2: Comparar puntos intermedios con más tolerancia
+            # 2️⃣ 🔥 NUEVO: Comparar 5 puntos intermedios de la ruta
             distancias = []
-            n_puntos = min(len(puntos1), len(puntos2), 5)  # ✅ Reducir a 5 puntos de muestreo
+            n_puntos = min(len(puntos1), len(puntos2), 5)  # Samplear 5 puntos
             
             if n_puntos > 2:
+                # Obtener índices distribuidos uniformemente
                 indices1 = [int(i * (len(puntos1) - 1) / (n_puntos - 1)) for i in range(n_puntos)]
                 indices2 = [int(i * (len(puntos2) - 1) / (n_puntos - 1)) for i in range(n_puntos)]
                 
+                # Comparar cada punto intermedio
                 for i1, i2 in zip(indices1, indices2):
                     dist = self._calcular_distancia_haversine(
                         puntos1[i1][0], puntos1[i1][1],
@@ -402,16 +403,20 @@ class PassiveTrackingService:
                     )
                     distancias.append(dist)
                 
-                # Calcular similitud con más tolerancia (150m en vez de 100m)
+                # Calcular similitud de la ruta completa
+                # Si los puntos están a menos de 150m en promedio → ruta similar
                 distancia_promedio = sum(distancias) / len(distancias)
-                similitud_ruta = max(0.0, 1.0 - (distancia_promedio / 150.0))  # ✅ 150m de tolerancia
+                similitud_ruta = max(0.0, 1.0 - (distancia_promedio / 150.0))
                 
-                # Combinar similitud base con similitud de ruta
+                # 3️⃣ Combinar similitud de origen/destino CON similitud de ruta
                 similitud_final = (similitud_base + similitud_ruta) / 2
+                
+                logger.info(f"   📏 Similitud final: {similitud_final*100:.1f}%")
+                logger.info(f"      Origen/destino: {similitud_base*100:.0f}%")
+                logger.info(f"      Ruta intermedia: {similitud_ruta*100:.0f}%")
             else:
                 similitud_final = similitud_base
             
-            logger.info(f"   📏 Similitud calculada: {similitud_final*100:.1f}%")
             return similitud_final
             
         except Exception as e:
@@ -424,7 +429,7 @@ class PassiveTrackingService:
         ubicacion_destino_id: int,
         predictibilidad: float
     ):
-        """Envía notificación FCM sobre predictibilidad detectada"""
+        """Envía notificación FCM sugiriendo generar rutas alternas"""
         try:
             from firebase_admin import messaging
             from app.usuarios.models import FCMToken
@@ -447,17 +452,17 @@ class PassiveTrackingService:
             nombre_destino = destino.nombre if destino else "este destino"
             porcentaje = int(predictibilidad * 100)
             
-            # 3. Preparar datos de notificación
-            titulo = "🎯 Patrón Detectado"
-            cuerpo = f"Viajas frecuentemente a {nombre_destino} ({porcentaje}%). ¿Activar tracking automático?"
+            # 🔥 CAMBIO: Título y mensaje más accionable
+            titulo = "🚗 Ruta frecuente detectada"
+            cuerpo = f"Viajas seguido a {nombre_destino}. Toca aquí para ver rutas alternas y variar tu camino."
             
-            logger.info(f"📤 Enviando notificación de predictibilidad...")
+            logger.info(f"📤 Enviando notificación de rutas alternas...")
             logger.info(f"   Usuario: {usuario_id}")
             logger.info(f"   Destino: {nombre_destino}")
             logger.info(f"   Predictibilidad: {porcentaje}%")
             logger.info(f"   Tokens: {len(tokens_obj)}")
             
-            # 4. Enviar uno por uno (sin usar send_multicast)
+            # 3. Enviar notificación
             exitosos = 0
             fallidos = 0
             tokens_invalidos = []
@@ -466,19 +471,22 @@ class PassiveTrackingService:
                 try:
                     logger.info(f"📱 Enviando a token: {token_obj.token[:50]}...")
                     
-                    # Crear mensaje FCM
+                    # 🔥 CAMBIO: Agregar información de navegación
                     message = messaging.Message(
                         notification=messaging.Notification(
                             title=titulo,
                             body=cuerpo
                         ),
                         data={
-                            "type": "predictibilidad",
+                            "type": "generar_rutas",  # ✅ Nuevo tipo
+                            "action": "navigate_to_routes",  # ✅ Acción específica
                             "titulo": titulo,
                             "cuerpo": cuerpo,
                             "ubicacion_destino_id": str(ubicacion_destino_id),
+                            "ubicacion_nombre": nombre_destino,
                             "predictibilidad": str(predictibilidad),
-                            "nombre_destino": nombre_destino
+                            "screen": "rutas_screen",  # ✅ Pantalla de destino
+                            "destino_id": str(ubicacion_destino_id)  # ✅ Parámetro de navegación
                         },
                         token=token_obj.token,
                         android=messaging.AndroidConfig(
@@ -486,7 +494,8 @@ class PassiveTrackingService:
                             notification=messaging.AndroidNotification(
                                 sound="default",
                                 channel_id="recuerdago_mensajes",
-                                color="#2196F3"
+                                color="#2196F3",
+                                click_action="FLUTTER_NOTIFICATION_CLICK"  # ✅ Para manejar el clic
                             )
                         )
                     )
@@ -500,13 +509,11 @@ class PassiveTrackingService:
                     fallidos += 1
                     tokens_invalidos.append(token_obj.token)
                     logger.warning(f"⚠️ Token no registrado: {token_obj.token[:50]}...")
-                    logger.warning(f"   Error: {str(e)}")
                     
                 except Exception as e:
                     fallidos += 1
                     logger.error(f"❌ Error enviando a token {token_obj.token[:50]}...")
                     logger.error(f"   Error: {str(e)}")
-                    logger.error(f"   Tipo: {type(e).__name__}")
             
             logger.info(f"📊 Resumen: {exitosos} exitosos, {fallidos} fallidos")
             
@@ -517,7 +524,7 @@ class PassiveTrackingService:
             }
             
         except Exception as e:
-            logger.error(f"❌ Error enviando notificación de predictibilidad: {e}")
+            logger.error(f"❌ Error enviando notificación: {e}")
             import traceback
             traceback.print_exc()
             return None
