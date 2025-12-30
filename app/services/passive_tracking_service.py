@@ -27,7 +27,7 @@ class PassiveTrackingService:
     RADIO_DESTINO_METROS = 100
     PUNTOS_QUIETO_REQUERIDOS = 6
     UMBRAL_SIMILITUD_TRAYECTORIA = 0.75
-    MIN_VIAJES_ANALISIS = 5
+    MIN_VIAJES_ANALISIS = 2
     UMBRAL_PREDICTIBILIDAD = 0.70
     
     def __init__(self, db: Session):
