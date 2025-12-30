@@ -109,6 +109,7 @@ from .grupos.router import router as grupos_router
 from .services.fcm_router import router as fcm_router
 from .grupos.WebSocket.routers import router as ws_grupos_router
 from .seguridad.seguridad import router as seguridad_router
+from .tracking.router import router as tracking_router
 
 app.include_router(usuarios_router)
 app.include_router(login_router)
@@ -121,6 +122,7 @@ app.include_router(grupos_router)
 app.include_router(fcm_router)
 app.include_router(ws_grupos_router)
 app.include_router(seguridad_router)
+app.include_router(tracking_router)
 
 if __name__ == "__main__":
     import uvicorn
