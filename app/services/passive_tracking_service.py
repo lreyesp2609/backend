@@ -35,16 +35,19 @@ class PassiveTrackingService:
     def guardar_lote_puntos_gps(
         self,
         usuario_id: int,
-        puntos: List[Dict]
+        puntos: List  # Puede ser List[PuntoGPSBatchItem] o List[Dict]
     ) -> int:
         """
         📦 Guarda múltiples puntos GPS en un solo request
         
         Args:
             usuario_id: ID del usuario
-            puntos: Lista de dicts con formato:
-                    [{"lat": -1.005, "lon": -79.443, "timestamp": "2024-...", 
-                    "precision": 10.0, "velocidad": 5.0}, ...]
+            puntos: Lista de objetos PuntoGPSBatchItem con:
+                    - lat: float
+                    - lon: float
+                    - timestamp: str (ISO format)
+                    - precision: Optional[float]
+                    - velocidad: Optional[float]
         
         Returns:
             Cantidad de puntos guardados exitosamente
@@ -54,21 +57,24 @@ class PassiveTrackingService:
             
             for punto_data in puntos:
                 try:
+                    # 🔧 Acceder como atributo de objeto Pydantic, no como dict
+                    timestamp_str = punto_data.timestamp if hasattr(punto_data, 'timestamp') else None
+                    
                     # Parsear timestamp si viene como string
-                    if isinstance(punto_data.get('timestamp'), str):
+                    if timestamp_str and isinstance(timestamp_str, str):
                         timestamp = datetime.fromisoformat(
-                            punto_data['timestamp'].replace('Z', '+00:00')
+                            timestamp_str.replace('Z', '+00:00')
                         )
                     else:
                         timestamp = datetime.utcnow()
                     
                     punto = PuntoGPSRaw(
                         usuario_id=usuario_id,
-                        latitud=punto_data['lat'],
-                        longitud=punto_data['lon'],
+                        latitud=punto_data.lat,
+                        longitud=punto_data.lon,
                         timestamp=timestamp,
-                        precision_metros=punto_data.get('precision'),
-                        velocidad=punto_data.get('velocidad')
+                        precision_metros=punto_data.precision if hasattr(punto_data, 'precision') else None,
+                        velocidad=punto_data.velocidad if hasattr(punto_data, 'velocidad') else None
                     )
                     
                     self.db.add(punto)
