@@ -400,7 +400,7 @@ class PassiveTrackingService:
             from app.ubicaciones.models import UbicacionUsuario
             from app.services.fcm_service import fcm_service
             
-            # ✅ SIN FILTRO DE activo (porque la columna no existe)
+            # 1. Obtener tokens FCM del usuario
             tokens_obj = self.db.query(FCMToken).filter(
                 FCMToken.usuario_id == usuario_id
             ).all()
@@ -411,7 +411,7 @@ class PassiveTrackingService:
             
             tokens = [t.token for t in tokens_obj]
             logger.info(f"📱 Encontrados {len(tokens)} tokens FCM para usuario {usuario_id}")
-                    
+            
             # 2. Obtener nombre del destino
             destino = self.db.query(UbicacionUsuario).filter(
                 UbicacionUsuario.id == ubicacion_destino_id
@@ -425,7 +425,7 @@ class PassiveTrackingService:
             mensaje = f"Viajas frecuentemente a {nombre_destino} ({porcentaje}%). ¿Activar tracking automático?"
             
             data = {
-                "type": "predictibilidad",  # ✅ Debe coincidir con Android
+                "type": "predictibilidad",
                 "titulo": titulo,
                 "cuerpo": mensaje,
                 "ubicacion_destino_id": str(ubicacion_destino_id),
@@ -439,7 +439,7 @@ class PassiveTrackingService:
             logger.info(f"   Predictibilidad: {porcentaje}%")
             logger.info(f"   Tokens: {len(tokens)}")
             
-            # 4. Enviar notificación (método ASYNC)
+            # 4. Enviar notificación
             resultado = await fcm_service.enviar_a_multiples(
                 tokens=tokens,
                 titulo=titulo,
@@ -448,15 +448,6 @@ class PassiveTrackingService:
             )
             
             logger.info(f"✅ Notificación enviada: {resultado['exitosos']} exitosos, {resultado['fallidos']} fallidos")
-            
-            # 5. Limpiar tokens inválidos
-            if resultado.get('tokens_invalidos'):
-                for token_invalido in resultado['tokens_invalidos']:
-                    self.db.query(FCMToken).filter(
-                        FCMToken.token == token_invalido
-                    ).update({"activo": False})
-                self.db.commit()
-                logger.info(f"🗑️ {len(resultado['tokens_invalidos'])} tokens marcados como inactivos")
             
             return resultado
             
