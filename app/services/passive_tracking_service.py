@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, func
 import math
 from .models import *
+import time
 logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════
@@ -468,45 +469,28 @@ class PassiveTrackingService:
                 try:
                     logger.info(f"📱 Enviando a token: {token_obj.token[:50]}...")
                     
-                    # 🔥 CRÍTICO: Enviar AMBOS notification Y data
+                    # 🔥 CRÍTICO: Enviar SOLO data (sin notification)
+                    # Esto garantiza que onMessageReceived() SIEMPRE se ejecute
                     message = messaging.Message(
-                        # ✅ notification: Para que aparezca cuando la app está cerrada
-                        notification=messaging.Notification(
-                            title=titulo,
-                            body=cuerpo
-                        ),
-                        # ✅ data: Para manejar la navegación cuando se toca
+                        # ❌ NO incluir notification - esto hace que el sistema lo maneje
+                        # notification=messaging.Notification(...),  # ELIMINADO
+                        
+                        # ✅ SOLO data - así tu código siempre se ejecuta
                         data={
                             "type": "generar_rutas",
-                            "action": "navigate_to_routes",
                             "titulo": titulo,
                             "cuerpo": cuerpo,
                             "ubicacion_destino_id": str(ubicacion_destino_id),
                             "ubicacion_nombre": nombre_destino,
                             "predictibilidad": str(predictibilidad),
-                            "screen": "rutas_screen",
-                            "destino_id": str(ubicacion_destino_id),
-                            # 🆕 CRÍTICO: Agregar estos campos para navegación
-                            "NAVIGATE_TO_ROUTES": "true",  # Como string, no boolean
-                            "UBICACION_DESTINO_ID": str(ubicacion_destino_id),
-                            "FROM_NOTIFICATION": "true"
+                            "NAVIGATE_TO_ROUTES": "true",
+                            "FROM_NOTIFICATION": "true",
+                            "timestamp": str(int(time.time() * 1000))
                         },
                         token=token_obj.token,
                         android=messaging.AndroidConfig(
                             priority="high",
-                            # 🔥 CRÍTICO: Configuración para que funcione con app cerrada
-                            notification=messaging.AndroidNotification(
-                                sound="default",
-                                channel_id="recuerdago_mensajes",
-                                color="#2196F3",
-                                click_action="FLUTTER_NOTIFICATION_CLICK",
-                                # 🆕 Agregar prioridad máxima
-                                priority="max",
-                                # 🆕 Configurar para despertar la app
-                                default_vibrate_timings=False,
-                                vibrate_timings_millis=[0, 300, 200, 300]
-                            ),
-                            # 🆕 CRÍTICO: ttl para asegurar entrega
+                            # 🔥 CRÍTICO: ttl para asegurar entrega
                             ttl=3600  # 1 hora
                         )
                     )
@@ -538,7 +522,7 @@ class PassiveTrackingService:
             import traceback
             traceback.print_exc()
             return None
-        
+    
     # Funciones auxiliares
     def _buscar_destino_cercano(self, usuario_id: int, lat: float, lon: float) -> Optional[int]:
         from app.ubicaciones.models import UbicacionUsuario
