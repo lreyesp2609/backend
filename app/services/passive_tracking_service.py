@@ -32,35 +32,66 @@ class PassiveTrackingService:
     def __init__(self, db: Session):
         self.db = db
     
-    def guardar_punto_gps(
+    def guardar_lote_puntos_gps(
         self,
         usuario_id: int,
-        latitud: float,
-        longitud: float,
-        precision: Optional[float] = None,
-        velocidad: Optional[float] = None
-    ) -> bool:
-        """Guarda un punto GPS"""
+        puntos: List[Dict]
+    ) -> int:
+        """
+        📦 Guarda múltiples puntos GPS en un solo request
+        
+        Args:
+            usuario_id: ID del usuario
+            puntos: Lista de dicts con formato:
+                    [{"lat": -1.005, "lon": -79.443, "timestamp": "2024-...", 
+                    "precision": 10.0, "velocidad": 5.0}, ...]
+        
+        Returns:
+            Cantidad de puntos guardados exitosamente
+        """
         try:
-            punto = PuntoGPSRaw(
-                usuario_id=usuario_id,
-                latitud=latitud,
-                longitud=longitud,
-                timestamp=datetime.utcnow(),
-                precision_metros=precision,
-                velocidad=velocidad
-            )
+            puntos_guardados = 0
             
-            self.db.add(punto)
+            for punto_data in puntos:
+                try:
+                    # Parsear timestamp si viene como string
+                    if isinstance(punto_data.get('timestamp'), str):
+                        timestamp = datetime.fromisoformat(
+                            punto_data['timestamp'].replace('Z', '+00:00')
+                        )
+                    else:
+                        timestamp = datetime.utcnow()
+                    
+                    punto = PuntoGPSRaw(
+                        usuario_id=usuario_id,
+                        latitud=punto_data['lat'],
+                        longitud=punto_data['lon'],
+                        timestamp=timestamp,
+                        precision_metros=punto_data.get('precision'),
+                        velocidad=punto_data.get('velocidad')
+                    )
+                    
+                    self.db.add(punto)
+                    puntos_guardados += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error guardando punto individual: {e}")
+                    continue
+            
+            # Commit todos los puntos
             self.db.commit()
             
+            # Intentar detectar viaje con los puntos nuevos
             self._intentar_detectar_viaje(usuario_id)
-            return True
+            
+            logger.info(f"📦 {puntos_guardados} puntos GPS guardados para usuario {usuario_id}")
+            
+            return puntos_guardados
             
         except Exception as e:
-            logger.error(f"Error guardando GPS: {e}")
+            logger.error(f"Error en guardar_lote_puntos_gps: {e}")
             self.db.rollback()
-            return False
+            raise
     
     def _intentar_detectar_viaje(self, usuario_id: int):
         """Detecta si se completó un viaje"""
