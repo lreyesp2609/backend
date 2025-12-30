@@ -400,19 +400,18 @@ class PassiveTrackingService:
             from app.ubicaciones.models import UbicacionUsuario
             from app.services.fcm_service import fcm_service
             
-            # 1. Obtener tokens FCM del usuario
+            # ✅ SIN FILTRO DE activo (porque la columna no existe)
             tokens_obj = self.db.query(FCMToken).filter(
-                FCMToken.usuario_id == usuario_id,
-                FCMToken.activo == True  # ✅ Solo tokens activos
+                FCMToken.usuario_id == usuario_id
             ).all()
             
             if not tokens_obj:
-                logger.warning(f"⚠️ No hay tokens FCM activos para usuario {usuario_id}")
+                logger.warning(f"⚠️ No hay tokens FCM para usuario {usuario_id}")
                 return
             
             tokens = [t.token for t in tokens_obj]
             logger.info(f"📱 Encontrados {len(tokens)} tokens FCM para usuario {usuario_id}")
-            
+                    
             # 2. Obtener nombre del destino
             destino = self.db.query(UbicacionUsuario).filter(
                 UbicacionUsuario.id == ubicacion_destino_id
