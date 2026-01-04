@@ -325,31 +325,25 @@ class PassiveTrackingService:
                 razon = ""
                 
                 if not patron.notificacion_enviada:
-                    # 🔔 CASO 1: Primera vez detectado como predecible
+                    # 🔔 CASO 1: Primera vez detectado
                     debe_notificar = True
                     razon = "Primera vez detectado como predecible"
                     
                 elif patron.fecha_ultima_notificacion:
                     hoy = datetime.utcnow().date()
                     ultimo_dia_notificado = patron.fecha_ultima_notificacion.date()
-                    dias_desde_ultima = (datetime.utcnow() - patron.fecha_ultima_notificacion).days
                     
                     if hoy == ultimo_dia_notificado:
-                        # 🚫 CASO 2: Ya notificamos HOY para este destino
+                        # 🚫 CASO 2: Ya notificamos HOY
                         debe_notificar = False
                         razon = f"Ya se notificó hoy para este destino"
-                        
-                    elif dias_desde_ultima >= 14:
-                        # 🔔 CASO 3: Han pasado 14+ días, enviar recordatorio
-                        debe_notificar = True
-                        razon = f"Han pasado {dias_desde_ultima} días, enviando recordatorio"
-                        
                     else:
-                        # 🚫 CASO 4: Es otro día, pero aún no pasan 14 días
-                        debe_notificar = False
-                        razon = f"Solo han pasado {dias_desde_ultima} días desde la última notificación"
+                        # 🔔 CASO 3: Es un día DIFERENTE → NOTIFICAR
+                        dias_desde_ultima = (datetime.utcnow() - patron.fecha_ultima_notificacion).days
+                        debe_notificar = True
+                        razon = f"Nuevo día detectado (pasaron {dias_desde_ultima} días)"
                 
-                logger.info(f"📊 Decisión de notificación: {razon}")
+                logger.info(f"📊 Decisión: {razon}")
                 
                 if debe_notificar:
                     import asyncio
