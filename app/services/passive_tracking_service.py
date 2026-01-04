@@ -322,22 +322,36 @@ class PassiveTrackingService:
             # 🔥 NUEVO: Lógica mejorada para notificaciones cada 14 días
             if es_predecible:
                 debe_notificar = False
+                razon = ""
                 
                 if not patron.notificacion_enviada:
-                    # Primera vez detectado como predecible
+                    # 🔔 CASO 1: Primera vez detectado como predecible
                     debe_notificar = True
-                    logger.info(f"🔔 Primera vez detectado como predecible, enviando notificación")
+                    razon = "Primera vez detectado como predecible"
+                    
                 elif patron.fecha_ultima_notificacion:
-                    # Ya se notificó antes, verificar si pasaron 14 días
+                    hoy = datetime.utcnow().date()
+                    ultimo_dia_notificado = patron.fecha_ultima_notificacion.date()
                     dias_desde_ultima = (datetime.utcnow() - patron.fecha_ultima_notificacion).days
-                    if dias_desde_ultima >= 14:
+                    
+                    if hoy == ultimo_dia_notificado:
+                        # 🚫 CASO 2: Ya notificamos HOY para este destino
+                        debe_notificar = False
+                        razon = f"Ya se notificó hoy para este destino"
+                        
+                    elif dias_desde_ultima >= 14:
+                        # 🔔 CASO 3: Han pasado 14+ días, enviar recordatorio
                         debe_notificar = True
-                        logger.info(f"🔔 Han pasado {dias_desde_ultima} días desde la última notificación, enviando recordatorio")
+                        razon = f"Han pasado {dias_desde_ultima} días, enviando recordatorio"
+                        
                     else:
-                        logger.info(f"⏳ Solo han pasado {dias_desde_ultima} días, esperando a 14 días para notificar")
+                        # 🚫 CASO 4: Es otro día, pero aún no pasan 14 días
+                        debe_notificar = False
+                        razon = f"Solo han pasado {dias_desde_ultima} días desde la última notificación"
+                
+                logger.info(f"📊 Decisión de notificación: {razon}")
                 
                 if debe_notificar:
-                    # 🔥 Crear tarea asíncrona en background
                     import asyncio
                     asyncio.create_task(
                         self._enviar_notificacion_predictibilidad(
@@ -349,7 +363,7 @@ class PassiveTrackingService:
                     patron.notificacion_enviada = True
                     patron.fecha_ultima_notificacion = datetime.utcnow()
                     self.db.commit()
-                    logger.info(f"✅ Notificación enviada y registrada")
+                    logger.info(f"✅ Notificación enviada: {razon}")
             
         except Exception as e:
             logger.error(f"Error analizando predictibilidad: {e}")
