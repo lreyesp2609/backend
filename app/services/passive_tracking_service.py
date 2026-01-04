@@ -319,20 +319,37 @@ class PassiveTrackingService:
             
             self.db.commit()
             
-            # ✅ AHORA SÍ FUNCIONA EL await
-            if es_predecible and not patron.notificacion_enviada:
-            # 🔥 Crear tarea asíncrona en background
-                import asyncio
-                asyncio.create_task(
-                    self._enviar_notificacion_predictibilidad(
-                        usuario_id, 
-                        ubicacion_destino_id, 
-                        patron.predictibilidad
+            # 🔥 NUEVO: Lógica mejorada para notificaciones cada 14 días
+            if es_predecible:
+                debe_notificar = False
+                
+                if not patron.notificacion_enviada:
+                    # Primera vez detectado como predecible
+                    debe_notificar = True
+                    logger.info(f"🔔 Primera vez detectado como predecible, enviando notificación")
+                elif patron.fecha_ultima_notificacion:
+                    # Ya se notificó antes, verificar si pasaron 14 días
+                    dias_desde_ultima = (datetime.utcnow() - patron.fecha_ultima_notificacion).days
+                    if dias_desde_ultima >= 14:
+                        debe_notificar = True
+                        logger.info(f"🔔 Han pasado {dias_desde_ultima} días desde la última notificación, enviando recordatorio")
+                    else:
+                        logger.info(f"⏳ Solo han pasado {dias_desde_ultima} días, esperando a 14 días para notificar")
+                
+                if debe_notificar:
+                    # 🔥 Crear tarea asíncrona en background
+                    import asyncio
+                    asyncio.create_task(
+                        self._enviar_notificacion_predictibilidad(
+                            usuario_id, 
+                            ubicacion_destino_id, 
+                            patron.predictibilidad
+                        )
                     )
-                )
-                patron.notificacion_enviada = True
-                patron.fecha_ultima_notificacion = datetime.utcnow()
-                self.db.commit()
+                    patron.notificacion_enviada = True
+                    patron.fecha_ultima_notificacion = datetime.utcnow()
+                    self.db.commit()
+                    logger.info(f"✅ Notificación enviada y registrada")
             
         except Exception as e:
             logger.error(f"Error analizando predictibilidad: {e}")
