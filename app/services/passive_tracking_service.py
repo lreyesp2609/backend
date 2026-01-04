@@ -274,7 +274,10 @@ class PassiveTrackingService:
             self.db.rollback()
     
     def _analizar_predictibilidad_destino(self, usuario_id: int, ubicacion_destino_id: int):
-        """Analiza predictibilidad"""
+        """
+        🔥 VERSIÓN PRODUCCIÓN: Sistema inteligente de notificaciones
+        Detecta patrones reales sin importar irregularidades
+        """
         try:
             viajes = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id,
@@ -282,8 +285,10 @@ class PassiveTrackingService:
             ).order_by(desc(ViajeDetectado.fecha_inicio)).all()
             
             if len(viajes) < self.MIN_VIAJES_ANALISIS:
+                logger.info(f"📊 Solo {len(viajes)} viajes, necesita {self.MIN_VIAJES_ANALISIS} para análisis")
                 return
             
+            # Analizar predictibilidad
             viajes_recientes = viajes[:10]
             grupos_similares = self._agrupar_trayectorias_similares(viajes_recientes)
             grupo_mas_grande = max(grupos_similares, key=lambda g: len(g['viajes']))
@@ -295,6 +300,7 @@ class PassiveTrackingService:
             
             logger.info(f"📊 Predictibilidad: {predictibilidad*100:.1f}% ({viajes_ruta_similar}/{total_viajes})")
             
+            # Obtener o crear patrón
             patron = self.db.query(PatronPredictibilidad).filter(
                 PatronPredictibilidad.usuario_id == usuario_id,
                 PatronPredictibilidad.ubicacion_destino_id == ubicacion_destino_id
@@ -319,31 +325,16 @@ class PassiveTrackingService:
             
             self.db.commit()
             
-            # 🔥 NUEVO: Lógica mejorada para notificaciones cada 14 días
+            # 🔥 SISTEMA INTELIGENTE DE NOTIFICACIONES
             if es_predecible:
-                debe_notificar = False
-                razon = ""
+                debe_notificar, razon = self._debe_notificar_patron(
+                    patron, 
+                    viajes,
+                    usuario_id,
+                    ubicacion_destino_id
+                )
                 
-                if not patron.notificacion_enviada:
-                    # 🔔 CASO 1: Primera vez detectado
-                    debe_notificar = True
-                    razon = "Primera vez detectado como predecible"
-                    
-                elif patron.fecha_ultima_notificacion:
-                    hoy = datetime.utcnow().date()
-                    ultimo_dia_notificado = patron.fecha_ultima_notificacion.date()
-                    
-                    if hoy == ultimo_dia_notificado:
-                        # 🚫 CASO 2: Ya notificamos HOY
-                        debe_notificar = False
-                        razon = f"Ya se notificó hoy para este destino"
-                    else:
-                        # 🔔 CASO 3: Es un día DIFERENTE → NOTIFICAR
-                        dias_desde_ultima = (datetime.utcnow() - patron.fecha_ultima_notificacion).days
-                        debe_notificar = True
-                        razon = f"Nuevo día detectado (pasaron {dias_desde_ultima} días)"
-                
-                logger.info(f"📊 Decisión: {razon}")
+                logger.info(f"📊 Decisión de notificación: {razon}")
                 
                 if debe_notificar:
                     import asyncio
@@ -362,7 +353,94 @@ class PassiveTrackingService:
         except Exception as e:
             logger.error(f"Error analizando predictibilidad: {e}")
             self.db.rollback()
-    
+
+    def _debe_notificar_patron(
+        self,
+        patron: PatronPredictibilidad,
+        viajes: List[ViajeDetectado],
+        usuario_id: int,
+        ubicacion_destino_id: int
+    ) -> Tuple[bool, str]:
+        """
+        🧠 Lógica inteligente para decidir si notificar
+        
+        Casos manejados:
+        1. Primera vez detectado
+        2. Mismo día (máximo 1 notificación)
+        3. Patrón frecuente (3+ viajes en 7 días)
+        4. Cooldown de 7 días después de notificar
+        5. Reset si no viaja en 14 días
+        """
+        
+        ahora = datetime.utcnow()
+        hoy = ahora.date()
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 1: Primera vez detectado como predecible
+        # ═══════════════════════════════════════════════════════
+        if not patron.notificacion_enviada:
+            return True, "🆕 Primera vez detectado como predecible"
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 2: Ya notificamos HOY (evitar spam)
+        # ═══════════════════════════════════════════════════════
+        if patron.fecha_ultima_notificacion:
+            ultimo_dia = patron.fecha_ultima_notificacion.date()
+            
+            if hoy == ultimo_dia:
+                return False, f"⏭️ Ya se notificó hoy para este destino"
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 3: Verificar cooldown de 7 días
+        # ═══════════════════════════════════════════════════════
+        if patron.fecha_ultima_notificacion:
+            dias_desde_ultima = (ahora - patron.fecha_ultima_notificacion).days
+            
+            if dias_desde_ultima < 7:
+                return False, f"⏳ Cooldown activo: {dias_desde_ultima}/7 días transcurridos"
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 4: Analizar ventana de 7 días (patrón frecuente)
+        # ═══════════════════════════════════════════════════════
+        hace_7_dias = ahora - timedelta(days=7)
+        
+        viajes_ultimos_7_dias = [
+            v for v in viajes 
+            if v.fecha_inicio >= hace_7_dias
+        ]
+        
+        # Contar días únicos en los que viajó
+        dias_unicos = set(v.fecha_inicio.date() for v in viajes_ultimos_7_dias)
+        cantidad_viajes_7d = len(viajes_ultimos_7_dias)
+        
+        logger.info(f"📊 Ventana 7 días:")
+        logger.info(f"   Viajes: {cantidad_viajes_7d}")
+        logger.info(f"   Días únicos: {len(dias_unicos)}")
+        
+        # 🔥 REGLA: Si hizo 3+ viajes en los últimos 7 días → Notificar
+        if cantidad_viajes_7d >= 3:
+            return True, f"🔥 Patrón frecuente: {cantidad_viajes_7d} viajes en {len(dias_unicos)} días (últimos 7 días)"
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 5: Reset automático si no viaja hace 14+ días
+        # ═══════════════════════════════════════════════════════
+        if viajes_ultimos_7_dias:
+            ultimo_viaje = max(viajes_ultimos_7_dias, key=lambda v: v.fecha_inicio)
+            dias_sin_viajar = (ahora - ultimo_viaje.fecha_inicio).days
+            
+            if dias_sin_viajar >= 14:
+                # Reset el patrón (como si fuera nuevo)
+                logger.info(f"🔄 Reset automático: {dias_sin_viajar} días sin viajar")
+                patron.notificacion_enviada = False
+                patron.fecha_ultima_notificacion = None
+                self.db.commit()
+                return True, f"🔄 Patrón reactivado después de {dias_sin_viajar} días sin viajar"
+        
+        # ═══════════════════════════════════════════════════════
+        # CASO 6: No cumple condiciones (esperar más datos)
+        # ═══════════════════════════════════════════════════════
+        return False, f"📊 Esperando más datos: {cantidad_viajes_7d}/3 viajes en ventana de 7 días"
+
     def _agrupar_trayectorias_similares(self, viajes: List[ViajeDetectado]) -> List[Dict]:
         """Agrupa viajes similares"""
         grupos = []
