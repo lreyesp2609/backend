@@ -100,9 +100,15 @@ class PassiveTrackingService:
                 ultimos[i+1].latitud, ultimos[i+1].longitud
             )
             distancias.append(dist)
+            logger.debug(f"   Punto {i} → {i+1}: {dist:.1f}m")  # ← Agregar este log
+        
+        if not distancias:
+            return False
         
         promedio = sum(distancias) / len(distancias)
         logger.info(f"📏 Distancia promedio últimos {self.PUNTOS_QUIETO_REQUERIDOS} puntos: {promedio:.1f}m")
+        logger.info(f"   Distancias individuales: {[f'{d:.1f}m' for d in distancias]}")  # ← Ver cada distancia
+        
         return promedio < 30
     
     async def _intentar_detectar_viaje(self, usuario_id: int):
@@ -127,11 +133,19 @@ class PassiveTrackingService:
                 logger.info(f"⏭️ Insuficientes puntos ({len(puntos)} < {self.PUNTOS_QUIETO_REQUERIDOS})")
                 return
             
-            if self._esta_quieto(puntos):
-                logger.info(f"✅ Usuario quieto confirmado, finalizando viaje")
-                await self._finalizar_viaje_en_progreso(usuario_id, puntos)  # ✅ Con await
+            # 🔥 NUEVO: Verificar si REALMENTE hubo movimiento en TODOS los puntos
+            distancia_total_real = self._calcular_distancia_total_ruta(puntos)
+            
+            logger.info(f"📏 Distancia total de la sesión: {distancia_total_real:.1f}m")
+            
+            # Si la distancia total es significativa Y ahora está quieto → Finalizar viaje
+            if distancia_total_real >= self.DISTANCIA_MINIMA_VIAJE and self._esta_quieto(puntos):
+                logger.info(f"✅ Usuario quieto confirmado después de moverse {distancia_total_real:.1f}m, finalizando viaje")
+                await self._finalizar_viaje_en_progreso(usuario_id, puntos)
+            elif distancia_total_real < self.DISTANCIA_MINIMA_VIAJE:
+                logger.info(f"⏭️ Movimiento insignificante ({distancia_total_real:.1f}m < {self.DISTANCIA_MINIMA_VIAJE}m)")
             else:
-                logger.info(f"🏃 Usuario en movimiento, acumulando puntos...")
+                logger.info(f"🏃 Usuario en movimiento, acumulando puntos... (distancia acumulada: {distancia_total_real:.1f}m)")
                 
         except Exception as e:
             logger.error(f"❌ Error detectando viaje: {e}")
