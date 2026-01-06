@@ -89,13 +89,10 @@ class PassiveTrackingService:
 
     async def _intentar_detectar_viaje(self, usuario_id: int):
         """
-        🧠 LÓGICA MEJORADA DE DETECCIÓN
+        🧠 LÓGICA MEJORADA DE DETECCIÓN - FIX APLICADO
         
-        Estrategia:
-        1. Buscar desde el último viaje O desde el último punto GPS - 30 min
-        2. Validar que haya suficientes puntos
-        3. Calcular distancia total del recorrido
-        4. Solo finalizar si: distancia >= mínima Y usuario está quieto
+        CAMBIO CRÍTICO: Buscar puntos DESPUÉS de saber cuál es el último viaje,
+        no basarse en el "último punto" que puede estar desactualizado
         """
         try:
             # ═══════════════════════════════════════════════════════
@@ -109,17 +106,10 @@ class PassiveTrackingService:
                 desde = ultimo_viaje.fecha_fin
                 logger.info(f"🔍 Buscando desde último viaje: {desde} UTC")
             else:
-                # No hay viajes previos, buscar desde el punto más antiguo reciente
-                ultimo_punto = self.db.query(PuntoGPSRaw).filter(
-                    PuntoGPSRaw.usuario_id == usuario_id
-                ).order_by(PuntoGPSRaw.timestamp.desc()).first()
-                
-                if ultimo_punto:
-                    desde = ultimo_punto.timestamp - timedelta(minutes=self.VENTANA_TIEMPO_PUNTOS)
-                    logger.info(f"🔍 Buscando desde {self.VENTANA_TIEMPO_PUNTOS} min antes del último punto: {desde} UTC")
-                else:
-                    desde = datetime.now(timezone.utc) - timedelta(hours=2)
-                    logger.info(f"🔍 Sin puntos previos, buscando desde: {desde} UTC")
+                # FIX: En lugar de buscar "último punto" y restarle 30 min,
+                # buscar directamente desde hace 2 horas
+                desde = datetime.now(timezone.utc) - timedelta(hours=2)
+                logger.info(f"🔍 Sin viajes previos, buscando desde: {desde} UTC")
             
             # ═══════════════════════════════════════════════════════
             # PASO 2: Obtener puntos GPS desde la fecha calculada
