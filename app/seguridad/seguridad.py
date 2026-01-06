@@ -177,26 +177,38 @@ def validar_rutas_seguridad(
                 duracion=rv.get('duration')
             ))
         
-        # Determinar si todas son seguras
+        # 🔥 MEJORAR LÓGICA DE ADVERTENCIAS
         todas_seguras = all(rv.es_segura for rv in rutas_validadas)
         
-        # Encontrar la mejor ruta segura
+        # Encontrar mejor ruta segura
         mejor_ruta_segura = None
+        ruta_menos_peligrosa = None
+        nivel_riesgo_minimo = 999
+        
         for rv in rutas_validadas:
             if rv.es_segura:
                 mejor_ruta_segura = rv.tipo
                 break
-        
-        # Generar advertencia general si ninguna es segura
-        advertencia_general = None
-        if not todas_seguras and mejor_ruta_segura is None:
-            nivel_minimo = min(rv.nivel_riesgo for rv in rutas_validadas)
-            if nivel_minimo >= 4:
-                advertencia_general = "TODAS las rutas pasan por zonas de alto riesgo."
             else:
-                advertencia_general = "Todas las rutas pasan por zonas con cierto nivel de riesgo. Mantente alerta."
+                # Buscar la menos peligrosa
+                if rv.nivel_riesgo < nivel_riesgo_minimo:
+                    nivel_riesgo_minimo = rv.nivel_riesgo
+                    ruta_menos_peligrosa = rv.tipo
         
-        # Contar zonas activas del usuario
+        # 🔥 GENERAR ADVERTENCIA CLARA
+        advertencia_general = None
+        if not todas_seguras:
+            if mejor_ruta_segura is None:
+                # 🚨 TODAS las rutas son peligrosas
+                if nivel_riesgo_minimo >= 4:
+                    advertencia_general = f"⚠️ TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{ruta_menos_peligrosa}' (menos peligrosa)."
+                else:
+                    advertencia_general = f"⚠️ Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{ruta_menos_peligrosa}'."
+            else:
+                # ✅ Algunas rutas son seguras
+                advertencia_general = f"✅ Usa la ruta '{mejor_ruta_segura}' (segura). Evita las otras que pasan por zonas peligrosas."
+        
+        # 🔥 CONTAR ZONAS ACTIVAS DEL USUARIO
         total_zonas = db.query(ZonaPeligrosaUsuario).filter(
             ZonaPeligrosaUsuario.usuario_id == current_user.id,
             ZonaPeligrosaUsuario.activa == True
@@ -206,13 +218,17 @@ def validar_rutas_seguridad(
             rutas_validadas=rutas_validadas,
             tipo_ml_recomendado=tipo_ml_recomendado,
             todas_seguras=todas_seguras,
-            mejor_ruta_segura=mejor_ruta_segura,
+            mejor_ruta_segura=mejor_ruta_segura or ruta_menos_peligrosa,  # 🔥 Siempre devolver algo
             advertencia_general=advertencia_general,
             total_zonas_usuario=total_zonas
         )
         
-        logger.info(f"✅ Validación completa para usuario {current_user.id}: "
-                   f"Todas seguras={todas_seguras}, ML recomienda={tipo_ml_recomendado}")
+        # 🔥 LOG CRÍTICO PARA DEBUG
+        logger.info(f"📊 VALIDACIÓN COMPLETA:")
+        logger.info(f"   Todas seguras: {todas_seguras}")
+        logger.info(f"   Mejor ruta: {mejor_ruta_segura or ruta_menos_peligrosa}")
+        logger.info(f"   Advertencia: {advertencia_general}")
+        logger.info(f"   Total zonas usuario: {total_zonas}")
         
         return respuesta
         
@@ -222,7 +238,7 @@ def validar_rutas_seguridad(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al validar rutas: {str(e)}"
         )
-
+    
 # ==========================================
 # 4. ACTUALIZAR ZONA PELIGROSA
 # ==========================================

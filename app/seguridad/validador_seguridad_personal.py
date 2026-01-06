@@ -17,11 +17,14 @@ class ValidadorSeguridadPersonal:
         self._cache_zonas = None
         self._cache_timestamp = None
         
-        # 🆕 CONFIGURACIÓN PARA DETECCIÓN DE PUENTES
-        self.RADIO_VERIFICACION_PUENTE = 200  # Radio para buscar puentes (metros)
-        self.MIN_PUNTOS_CONSECUTIVOS = 3  # Mínimo de puntos para confirmar intersección
-        self.VELOCIDAD_MINIMA_PUENTE = 8.0  # m/s (~29 km/h) indica que va rápido = posible puente
-        self.TOLERANCIA_INTERSECCION_REAL = 25  # Metros - solo cuenta si REALMENTE pasa por dentro
+        # 🔥 AJUSTAR ESTOS VALORES
+        self.RADIO_VERIFICACION_PUENTE = 200
+        self.MIN_PUNTOS_CONSECUTIVOS = 3
+        self.VELOCIDAD_MINIMA_PUENTE = 12.0  # ← CAMBIAR de 8.0 a 12.0 (más estricto)
+        self.TOLERANCIA_INTERSECCION_REAL = 50  # ← CAMBIAR de 25 a 50 (más permisivo)
+        
+        # 🆕 NUEVOS UMBRALES
+        self.UMBRAL_CONFIANZA_MINIMA = 30  # Bajar de 50 a 30
         
     def _get_zonas_peligrosas_usuario(self) -> List:
         """Obtiene zonas peligrosas activas del usuario"""
@@ -210,35 +213,27 @@ class ValidadorSeguridadPersonal:
         es_posible_puente = False
         confianza_interseccion = 100
         
-        # Indicadores de PUENTE:
-        if clustering_score < 0.3:  # Puntos muy dispersos
+        # Indicadores de PUENTE (más estrictos):
+        if clustering_score < 0.2:  # ← Cambiar de 0.3 a 0.2
+            es_posible_puente = True
+            confianza_interseccion -= 50  # ← Penalizar más fuerte
+            logger.info(f"   ⚠️ {zona.nombre}: Puntos MUY dispersos")
+        
+        if velocidad_promedio > self.VELOCIDAD_MINIMA_PUENTE:  # Ahora 12 m/s
             es_posible_puente = True
             confianza_interseccion -= 40
-            logger.info(f"   ⚠️ {zona.nombre}: Puntos dispersos (clustering={clustering_score:.2f}) - posible puente")
+            logger.info(f"   ⚠️ {zona.nombre}: Velocidad ALTA ({velocidad_promedio:.1f} m/s)")
         
-        if velocidad_promedio > self.VELOCIDAD_MINIMA_PUENTE:  # Va muy rápido
+        # 🔥 SOLO descartar si la distancia es > 150m Y hay otros indicadores
+        if distancia_minima > 150 and clustering_score < 0.2:  # ← Combinación
             es_posible_puente = True
-            confianza_interseccion -= 30
-            logger.info(f"   ⚠️ {zona.nombre}: Alta velocidad ({velocidad_promedio:.1f} m/s) - posible autopista/puente")
+            confianza_interseccion -= 40
         
-        if distancia_minima > 100:  # Solo pasa por el borde
-            es_posible_puente = True
-            confianza_interseccion -= 30
-            logger.info(f"   ⚠️ {zona.nombre}: Solo pasa por el borde (dist={distancia_minima:.1f}m)")
-        
-        if not patron_entrada_salida['transito_lento']:  # No hay tránsito lento
-            confianza_interseccion -= 20
-        
-        # 🎯 UMBRAL DE DECISIÓN
-        # Solo es intersección REAL si:
-        # 1. Tiene suficientes puntos consecutivos Y
-        # 2. La confianza es > 50% Y
-        # 3. Hay puntos muy cerca del centro O hay tránsito lento
-        
+        # 🎯 UMBRAL DE DECISIÓN MEJORADO
         es_interseccion_real = (
-            clustering_score >= 0.3 and  # Puntos agrupados
-            confianza_interseccion >= 50 and  # Confianza aceptable
-            (puntos_muy_cerca_centro >= 2 or patron_entrada_salida['transito_lento'])  # Confirmación
+            clustering_score >= 0.15 and  # ← Más permisivo (antes 0.3)
+            confianza_interseccion >= 30 and  # ← Más permisivo (antes 50)
+            (puntos_muy_cerca_centro >= 1 or patron_entrada_salida['transito_lento'] or distancia_minima <= 100)  # ← Añadir distancia
         )
         
         # Calcular porcentaje
