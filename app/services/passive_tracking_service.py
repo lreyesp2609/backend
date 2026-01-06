@@ -8,7 +8,7 @@ from .models import PuntoGPSRaw, ViajeDetectado, PatronPredictibilidad
 
 logger = logging.getLogger(__name__)
 
-
+ 
 class PassiveTrackingService:
     """
     📍 Servicio de tracking GPS pasivo - VERSIÓN PRODUCCIÓN
