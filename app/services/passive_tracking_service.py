@@ -370,7 +370,7 @@ class PassiveTrackingService:
         """
         🔥 Sistema inteligente de análisis de patrones
         """
-        try: 
+        try:
             viajes = self.db.query(ViajeDetectado).filter(
                 ViajeDetectado.usuario_id == usuario_id,
                 ViajeDetectado.ubicacion_destino_id == ubicacion_destino_id
