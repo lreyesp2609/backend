@@ -101,3 +101,24 @@ class EstadisticasSeguridad(BaseModel):
     zonas_inactivas: int
     rutas_validadas_historico: int
     rutas_con_advertencias: int
+
+
+class VerificarUbicacionRequest(BaseModel):
+    """Request para verificar si una ubicación está en zona peligrosa"""
+    lat: float
+    lon: float
+
+class ZonaPeligrosaDetectada(BaseModel):
+    """Zona peligrosa detectada en la ubicación actual"""
+    zona_id: int
+    nombre: str
+    nivel_peligro: int
+    tipo: Optional[str]
+    distancia_al_centro: float  # en metros
+    dentro_de_zona: bool
+
+class VerificarUbicacionResponse(BaseModel):
+    """Respuesta de verificación de ubicación"""
+    hay_peligro: bool
+    zonas_detectadas: List[ZonaPeligrosaDetectada]
+    mensaje_alerta: Optional[str] = None

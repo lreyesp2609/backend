@@ -417,3 +417,96 @@ def toggle_zona_activa(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al cambiar estado de zona"
         )
+
+@router.post("/verificar-ubicacion-actual", response_model=VerificarUbicacionResponse)
+def verificar_ubicacion_actual(
+    request: VerificarUbicacionRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    🚨 ALERTA EN TIEMPO REAL: Verifica si el usuario está en zona peligrosa
+    
+    **Flujo:**
+    1. Android envía ubicación actual cada 30-60 segundos (background)
+    2. Backend verifica contra zonas del usuario
+    3. Si está en zona peligrosa → Retorna alerta
+    4. Android muestra notificación INMEDIATA (NO guarda nada)
+    
+    **Caso de Uso:**
+    - Usuario caminando → Entra a zona marcada como peligrosa
+    - Backend detecta → Retorna alerta
+    - Android muestra: "⚠️ ZONA PELIGROSA: Callejón oscuro - Nivel Alto"
+    """
+    try:
+        from .models import ZonaPeligrosaUsuario
+        from .geometria import calcular_distancia_haversine
+        
+        # 1. Obtener zonas activas del usuario
+        zonas = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.usuario_id == current_user.id,
+            ZonaPeligrosaUsuario.activa == True
+        ).all()
+        
+        if not zonas:
+            return VerificarUbicacionResponse(
+                hay_peligro=False,
+                zonas_detectadas=[],
+                mensaje_alerta=None
+            )
+        
+        # 2. Verificar cada zona
+        zonas_detectadas = []
+        nivel_peligro_maximo = 0
+        
+        for zona in zonas:
+            # Obtener centro de la zona (primer punto del polígono)
+            centro = zona.poligono[0] if zona.poligono else None
+            if not centro:
+                continue
+            
+            radio_zona = zona.radio_metros or 200
+            
+            # Calcular distancia al centro
+            distancia = calcular_distancia_haversine(
+                request.lat, request.lon,
+                centro['lat'], centro['lon']
+            )
+            
+            # ¿Está dentro del radio?
+            dentro = distancia <= radio_zona
+            
+            if dentro:
+                zonas_detectadas.append(ZonaPeligrosaDetectada(
+                    zona_id=zona.id,
+                    nombre=zona.nombre,
+                    nivel_peligro=zona.nivel_peligro,
+                    tipo=zona.tipo,
+                    distancia_al_centro=round(distancia, 1),
+                    dentro_de_zona=True
+                ))
+                
+                nivel_peligro_maximo = max(nivel_peligro_maximo, zona.nivel_peligro)
+        
+        # 3. Generar mensaje de alerta
+        mensaje_alerta = None
+        if zonas_detectadas:
+            if nivel_peligro_maximo >= 4:
+                mensaje_alerta = f"⚠️ ZONA DE ALTO RIESGO: {zonas_detectadas[0].nombre}"
+            elif nivel_peligro_maximo == 3:
+                mensaje_alerta = f"⚠️ ZONA DE RIESGO MODERADO: {zonas_detectadas[0].nombre}"
+            else:
+                mensaje_alerta = f"ℹ️ Zona marcada: {zonas_detectadas[0].nombre}"
+        
+        return VerificarUbicacionResponse(
+            hay_peligro=len(zonas_detectadas) > 0,
+            zonas_detectadas=zonas_detectadas,
+            mensaje_alerta=mensaje_alerta
+        )
+        
+    except Exception as e:
+        logger.error(f"Error verificando ubicación: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al verificar ubicación: {str(e)}"
+        )
