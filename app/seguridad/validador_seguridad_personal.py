@@ -17,14 +17,11 @@ class ValidadorSeguridadPersonal:
         self._cache_zonas = None
         self._cache_timestamp = None
         
-        # 🔥 AJUSTAR ESTOS VALORES
+        # 🔥 PARÁMETROS DE DETECCIÓN DE PUENTES
         self.RADIO_VERIFICACION_PUENTE = 200
         self.MIN_PUNTOS_CONSECUTIVOS = 3
-        self.VELOCIDAD_MINIMA_PUENTE = 12.0  # ← CAMBIAR de 8.0 a 12.0 (más estricto)
-        self.TOLERANCIA_INTERSECCION_REAL = 50  # ← CAMBIAR de 25 a 50 (más permisivo)
-        
-        # 🆕 NUEVOS UMBRALES
-        self.UMBRAL_CONFIANZA_MINIMA = 30  # Bajar de 50 a 30
+        self.VELOCIDAD_MINIMA_PUENTE = 12.0  # m/s (~43 km/h)
+        self.UMBRAL_CONFIANZA_MINIMA = 25  # Más permisivo
         
     def _get_zonas_peligrosas_usuario(self) -> List:
         """Obtiene zonas peligrosas activas del usuario"""
@@ -137,13 +134,9 @@ class ValidadorSeguridadPersonal:
         metadata: Dict = None
     ) -> Dict:
         """
-        🔥 NUEVO: Analiza si la ruta REALMENTE pasa por la zona o solo es un puente
+        🔥 CORREGIDO: Analiza si la ruta REALMENTE pasa por la zona
         
-        Estrategias:
-        1. Verificar clustering de puntos (¿hay muchos puntos consecutivos dentro?)
-        2. Analizar velocidad (¿va muy rápido? = posible puente/autopista elevada)
-        3. Verificar distancia mínima al centro (¿pasa justo por el borde o por el centro?)
-        4. Análisis de patrón de entrada/salida
+        Ahora usa el radio de la zona para decidir si hay intersección real.
         """
         
         # Datos de la zona
@@ -188,10 +181,9 @@ class ValidadorSeguridadPersonal:
             }
         
         # 🔥 ESTRATEGIA 1: Análisis de clustering
-        # Si los puntos están muy dispersos = posible puente
         clustering_score = self._analizar_clustering(indices_puntos_dentro)
         
-        # 🔥 ESTRATEGIA 2: Análisis de velocidad (si disponible en metadata)
+        # 🔥 ESTRATEGIA 2: Análisis de velocidad
         velocidad_promedio = self._estimar_velocidad_promedio(
             puntos_ruta, 
             indices_puntos_dentro,
@@ -213,27 +205,44 @@ class ValidadorSeguridadPersonal:
         es_posible_puente = False
         confianza_interseccion = 100
         
-        # Indicadores de PUENTE (más estrictos):
-        if clustering_score < 0.2:  # ← Cambiar de 0.3 a 0.2
-            es_posible_puente = True
-            confianza_interseccion -= 50  # ← Penalizar más fuerte
-            logger.info(f"   ⚠️ {zona.nombre}: Puntos MUY dispersos")
-        
-        if velocidad_promedio > self.VELOCIDAD_MINIMA_PUENTE:  # Ahora 12 m/s
+        # Indicadores de PUENTE:
+        if clustering_score < 0.2:
             es_posible_puente = True
             confianza_interseccion -= 40
+            logger.info(f"   ⚠️ {zona.nombre}: Puntos dispersos (clustering: {clustering_score:.2f})")
+        
+        if velocidad_promedio > self.VELOCIDAD_MINIMA_PUENTE:
+            es_posible_puente = True
+            confianza_interseccion -= 35
             logger.info(f"   ⚠️ {zona.nombre}: Velocidad ALTA ({velocidad_promedio:.1f} m/s)")
         
-        # 🔥 SOLO descartar si la distancia es > 150m Y hay otros indicadores
-        if distancia_minima > 150 and clustering_score < 0.2:  # ← Combinación
-            es_posible_puente = True
-            confianza_interseccion -= 40
+        # 🔥 CLAVE: Solo descartar si está MUY lejos Y hay otros indicadores negativos
+        # Usar un porcentaje del radio (ej: 75% del radio) como umbral máximo
+        umbral_distancia_maxima = radio_zona * 0.75
         
-        # 🎯 UMBRAL DE DECISIÓN MEJORADO
+        if distancia_minima > umbral_distancia_maxima and clustering_score < 0.2:
+            es_posible_puente = True
+            confianza_interseccion -= 30
+            logger.info(f"   ⚠️ {zona.nombre}: Distancia > 75% del radio ({distancia_minima:.1f}m vs {umbral_distancia_maxima:.1f}m)")
+        
+        # 🎯 UMBRAL DE DECISIÓN CORREGIDO
+        # La ruta es "intersección real" si:
+        # 1. Tiene puntos dentro del radio (ya verificado arriba)
+        # 2. Y CUMPLE AL MENOS UNA de estas condiciones:
+        #    a) El clustering es razonable (>= 0.15)
+        #    b) Hay puntos muy cerca del centro (< 50m)
+        #    c) La distancia mínima está dentro del radio de la zona
+        #    d) Hay evidencia de tránsito lento
+        
         es_interseccion_real = (
-            clustering_score >= 0.15 and  # ← Más permisivo (antes 0.3)
-            confianza_interseccion >= 30 and  # ← Más permisivo (antes 50)
-            (puntos_muy_cerca_centro >= 1 or patron_entrada_salida['transito_lento'] or distancia_minima <= 100)  # ← Añadir distancia
+            puntos_dentro > 0 and  # Tiene puntos dentro
+            confianza_interseccion >= self.UMBRAL_CONFIANZA_MINIMA and  # Confianza mínima
+            (
+                clustering_score >= 0.15 or  # Puntos agrupados
+                puntos_muy_cerca_centro >= 1 or  # Pasa cerca del centro
+                distancia_minima <= radio_zona or  # Está dentro del radio (CLAVE)
+                patron_entrada_salida['transito_lento']  # Tránsito lento detectado
+            )
         )
         
         # Calcular porcentaje
@@ -242,13 +251,15 @@ class ValidadorSeguridadPersonal:
         # Log detallado
         if puntos_dentro > 0:
             logger.info(f"📊 {zona.nombre}:")
+            logger.info(f"   Radio zona: {radio_zona}m")
             logger.info(f"   Puntos dentro: {puntos_dentro}/{len(puntos_ruta)}")
             logger.info(f"   Puntos cerca centro: {puntos_muy_cerca_centro}")
             logger.info(f"   Clustering: {clustering_score:.2f}")
             logger.info(f"   Velocidad estimada: {velocidad_promedio:.1f} m/s")
             logger.info(f"   Distancia mínima: {distancia_minima:.1f}m")
+            logger.info(f"   Umbral máx distancia: {umbral_distancia_maxima:.1f}m")
             logger.info(f"   Confianza: {confianza_interseccion}%")
-            logger.info(f"   {'❌ DESCARTADO' if es_posible_puente and not es_interseccion_real else '✅ INTERSECCIÓN REAL'}")
+            logger.info(f"   {'✅ INTERSECCIÓN REAL' if es_interseccion_real else '❌ DESCARTADO (posible puente)'}")
         
         return {
             'es_interseccion_real': es_interseccion_real,
@@ -288,17 +299,13 @@ class ValidadorSeguridadPersonal:
     ) -> float:
         """
         Estima la velocidad promedio en la zona
-        
-        Métodos:
-        1. Si metadata tiene 'tipo_transporte' y 'duracion', calcular
-        2. Distancia entre puntos / tiempo estimado
         """
         
         # Método 1: Usar metadata si disponible
         if metadata and 'duration' in metadata and 'distance' in metadata:
             try:
-                duracion_s = metadata['duration']  # segundos
-                distancia_m = metadata['distance']  # metros
+                duracion_s = metadata['duration']
+                distancia_m = metadata['distance']
                 if duracion_s > 0:
                     velocidad = distancia_m / duracion_s
                     return velocidad
@@ -327,10 +334,6 @@ class ValidadorSeguridadPersonal:
     ) -> Dict:
         """
         Analiza el patrón de cómo la ruta entra y sale de la zona
-        
-        Retorna:
-            - transito_lento: Si hay evidencia de tránsito lento/detenido
-            - entrada_gradual: Si entra gradualmente o de golpe
         """
         
         if len(indices_dentro) < 3:
@@ -350,9 +353,8 @@ class ValidadorSeguridadPersonal:
         puntos_muy_juntos = sum(1 for d in distancias_dentro if d < 30)
         transito_lento = puntos_muy_juntos >= 3
         
-        # ¿Entrada gradual? (distancias decrecientes progresivamente)
+        # ¿Entrada gradual?
         if len(distancias_dentro) >= 3:
-            # Verificar si hay patrón de acercamiento gradual
             primeras_3 = distancias_dentro[:3]
             entrada_gradual = (
                 primeras_3[0] > primeras_3[1] > primeras_3[2] or
@@ -367,7 +369,7 @@ class ValidadorSeguridadPersonal:
         }
     
     # ══════════════════════════════════════════════════════════
-    # MÉTODOS AUXILIARES (mantener los existentes)
+    # MÉTODOS AUXILIARES
     # ══════════════════════════════════════════════════════════
     
     def _calcular_distancia_haversine(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
