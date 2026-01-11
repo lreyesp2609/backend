@@ -154,7 +154,7 @@ def validar_rutas_seguridad(
         from .geometria import calcular_distancia_haversine
 
         zonas_publicas_cercanas = db.query(ZonaPeligrosaUsuario).filter(
-            ZonaPeligrosaUsuario.usuario_id != current_user.id,
+            ZonaPeligrosaUsuario.usuario_id != current_user.id,  # ✅ No incluir propias
             ZonaPeligrosaUsuario.activa == True
         ).all()
 
@@ -205,13 +205,15 @@ def validar_rutas_seguridad(
             )
             
             # 🚀 NUEVO: Validar contra zonas PÚBLICAS
+            zonas_ids_propias = {z.id for z in zonas_propias}
+
+            # Validar contra zonas PÚBLICAS
             zonas_publicas_detectadas = []
 
             for zona_publica in zonas_publicas_filtradas:
-                # ✅ USAR los puntos ya decodificados
                 resultado_zona = validador._analizar_zona_con_deteccion_puentes(
                     zona_publica,
-                    puntos_ruta,  # ✅ Ya está decodificado
+                    puntos_ruta,
                     metadata={
                         'tipo': ruta.tipo,
                         'distance': ruta.distance,
@@ -226,14 +228,14 @@ def validar_rutas_seguridad(
                             ubicacion_destino.latitud, ubicacion_destino.longitud,
                             centro['lat'], centro['lon']
                         ) / 1000.0
-                        
+
                         zonas_publicas_detectadas.append({
                             'zona_id': zona_publica.id,
                             'nombre': zona_publica.nombre,
                             'nivel_peligro': zona_publica.nivel_peligro,
                             'tipo': zona_publica.tipo,
                             'distancia_km': round(distancia_km, 1),
-                            'puede_guardar': True,
+                            'puede_guardar': zona_publica.id not in zonas_ids_propias,  # 🔥 USA EL SET
                             'porcentaje_ruta': resultado_zona['porcentaje']
                         })
             
