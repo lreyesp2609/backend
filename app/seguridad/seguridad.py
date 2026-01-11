@@ -10,7 +10,7 @@ from .seguridad_schemas import *
 from .validador_seguridad_personal import *
 from ..services.ucb_service import UCBService
 from .geometria import *
-from .models import UbicacionUsuario
+from ..ubicaciones.models import UbicacionUsuario
 
 logger = logging.getLogger(__name__)
 
