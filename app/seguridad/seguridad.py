@@ -10,6 +10,7 @@ from .seguridad_schemas import *
 from .validador_seguridad_personal import *
 from ..services.ucb_service import UCBService
 from .geometria import *
+from .models import UbicacionUsuario
 
 logger = logging.getLogger(__name__)
 
@@ -127,60 +128,157 @@ def validar_rutas_seguridad(
     current_user = Depends(get_current_user)
 ):
     try:
-        # Inicializar validador para este usuario
-        validador = ValidadorSeguridadPersonal(db, current_user.id)
+        # ══════════════════════════════════════════════════════════
+        # 🔥 NUEVA LÓGICA: VALIDAR CONTRA ZONAS PROPIAS + PÚBLICAS
+        # ══════════════════════════════════════════════════════════
         
-        # Obtener recomendación de ML (UCB)
+        # 1️⃣ Obtener ubicación del destino
+        ubicacion_destino = db.query(UbicacionUsuario).filter(
+            UbicacionUsuario.id == request.ubicacion_id
+        ).first()
+        
+        if not ubicacion_destino:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ubicación de destino no encontrada"
+            )
+        
+        # 2️⃣ Obtener zonas PROPIAS del usuario
+        validador = ValidadorSeguridadPersonal(db, current_user.id)
+        zonas_propias = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.usuario_id == current_user.id,
+            ZonaPeligrosaUsuario.activa == True
+        ).all()
+        
+        # 3️⃣ 🚀 NUEVO: Obtener zonas PÚBLICAS cerca del DESTINO
+        from .geometria import calcular_distancia_haversine
+        
+        zonas_publicas_cercanas = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.usuario_id != current_user.id,
+            ZonaPeligrosaUsuario.activa == True
+        ).all()
+        
+        # Filtrar por distancia al destino (10km)
+        zonas_publicas_filtradas = []
+        radio_busqueda_metros = 10_000  # 10km
+        
+        for zona in zonas_publicas_cercanas:
+            centro = zona.poligono[0] if zona.poligono else None
+            if not centro:
+                continue
+            
+            distancia = calcular_distancia_haversine(
+                ubicacion_destino.lat, ubicacion_destino.lon,
+                centro['lat'], centro['lon']
+            )
+            
+            if distancia <= radio_busqueda_metros:
+                zonas_publicas_filtradas.append(zona)
+        
+        logger.info(f"🌍 Zonas públicas cerca del destino: {len(zonas_publicas_filtradas)}")
+        logger.info(f"🔒 Zonas propias del usuario: {len(zonas_propias)}")
+        
+        # 4️⃣ Obtener recomendación de ML (UCB)
         ucb_service = UCBService(db)
         tipo_ml_recomendado = ucb_service.seleccionar_tipo_ruta(
             usuario_id=current_user.id,
             ubicacion_id=request.ubicacion_id
         )
         
-        logger.info(f"🤖 ML recomienda '{tipo_ml_recomendado}' para usuario {current_user.id}, "
-                   f"ubicación {request.ubicacion_id}")
+        logger.info(f"🤖 ML recomienda '{tipo_ml_recomendado}'")
         
-        # Validar cada ruta
-        rutas_para_validar = [
-            {
-                'tipo': ruta.tipo,
-                'geometry': ruta.geometry,
-                'distance': ruta.distance,
-                'duration': ruta.duration
-            }
-            for ruta in request.rutas
-        ]
-        
-        rutas_validadas_raw = validador.validar_multiples_rutas(rutas_para_validar)
-        
-        # Convertir a schema de respuesta
+        # 5️⃣ Validar cada ruta contra TODAS las zonas (propias + públicas)
         rutas_validadas = []
-        for rv in rutas_validadas_raw:
-            zonas_detectadas = [
-                ZonaDetectada(
-                    zona_id=z['zona_id'],
-                    nombre=z['nombre'],
-                    nivel_peligro=z['nivel_peligro'],
-                    tipo=z.get('tipo'),
-                    porcentaje_ruta=z['porcentaje_ruta']
-                )
-                for z in rv['zonas_detectadas']
+        
+        for ruta in request.rutas:
+            # Validar contra zonas PROPIAS
+            validacion_propias = validador.validar_ruta(
+                geometry=ruta.geometry,
+                tipo_ruta=ruta.tipo
+            )
+            
+            # 🚀 NUEVO: Validar contra zonas PÚBLICAS
+            zonas_publicas_detectadas = []
+            
+            for zona_publica in zonas_publicas_filtradas:
+                # Validar si la ruta cruza esta zona pública
+                if validador._ruta_cruza_zona(ruta.geometry, zona_publica):
+                    centro = zona_publica.poligono[0] if zona_publica.poligono else None
+                    if centro:
+                        distancia_km = calcular_distancia_haversine(
+                            ubicacion_destino.lat, ubicacion_destino.lon,
+                            centro['lat'], centro['lon']
+                        ) / 1000.0
+                        
+                        zonas_publicas_detectadas.append({
+                            'zona_id': zona_publica.id,
+                            'nombre': zona_publica.nombre,
+                            'nivel_peligro': zona_publica.nivel_peligro,
+                            'tipo': zona_publica.tipo,
+                            'distancia_km': round(distancia_km, 1),
+                            'puede_guardar': True
+                        })
+            
+            # Combinar zonas propias + públicas
+            todas_zonas_detectadas = validacion_propias['zonas_detectadas'] + [
+                {
+                    'zona_id': z['zona_id'],
+                    'nombre': z['nombre'],
+                    'nivel_peligro': z['nivel_peligro'],
+                    'tipo': z.get('tipo'),
+                    'porcentaje_ruta': 10.0  # Estimado
+                }
+                for z in zonas_publicas_detectadas
             ]
             
-            rutas_validadas.append(RutaValidada(
-                tipo=rv['tipo'],
-                es_segura=rv['es_segura'],
-                nivel_riesgo=rv['nivel_riesgo'],
-                zonas_detectadas=zonas_detectadas,
-                mensaje=rv['mensaje'],
-                distancia=rv.get('distance'),
-                duracion=rv.get('duration')
-            ))
+            # Determinar si es segura
+            es_segura = len(todas_zonas_detectadas) == 0
+            
+            # Calcular nivel de riesgo máximo
+            nivel_riesgo = max(
+                [z['nivel_peligro'] for z in todas_zonas_detectadas],
+                default=0
+            )
+            
+            # Generar mensaje
+            if es_segura:
+                mensaje = None
+            elif len(zonas_publicas_detectadas) > 0 and len(validacion_propias['zonas_detectadas']) == 0:
+                # Solo detectó zonas públicas (no propias)
+                mensaje = f"⚠️ Esta ruta pasa por {len(zonas_publicas_detectadas)} zona(s) reportada(s) por otros usuarios"
+            elif len(validacion_propias['zonas_detectadas']) > 0:
+                # Detectó zonas propias (con o sin públicas)
+                mensaje = validacion_propias['mensaje']
+            else:
+                mensaje = validacion_propias['mensaje']
+            
+            # Crear objeto de respuesta
+            ruta_validada = RutaValidada(
+                tipo=ruta.tipo,
+                es_segura=es_segura,
+                nivel_riesgo=nivel_riesgo,
+                zonas_detectadas=[
+                    ZonaDetectada(
+                        zona_id=z['zona_id'],
+                        nombre=z['nombre'],
+                        nivel_peligro=z['nivel_peligro'],
+                        tipo=z.get('tipo'),
+                        porcentaje_ruta=z['porcentaje_ruta']
+                    )
+                    for z in todas_zonas_detectadas
+                ],
+                mensaje=mensaje,
+                distancia=ruta.distance,
+                duracion=ruta.duration,
+                # 🚀 NUEVO: Agregar zonas públicas detectadas
+                zonas_publicas_detectadas=zonas_publicas_detectadas if zonas_publicas_detectadas else None
+            )
+            
+            rutas_validadas.append(ruta_validada)
         
-        # 🔥 MEJORAR LÓGICA DE ADVERTENCIAS
+        # 6️⃣ Determinar mejor ruta y advertencias
         todas_seguras = all(rv.es_segura for rv in rutas_validadas)
         
-        # Encontrar mejor ruta segura
         mejor_ruta_segura = None
         ruta_menos_peligrosa = None
         nivel_riesgo_minimo = 999
@@ -190,45 +288,40 @@ def validar_rutas_seguridad(
                 mejor_ruta_segura = rv.tipo
                 break
             else:
-                # Buscar la menos peligrosa
                 if rv.nivel_riesgo < nivel_riesgo_minimo:
                     nivel_riesgo_minimo = rv.nivel_riesgo
                     ruta_menos_peligrosa = rv.tipo
         
-        # 🔥 GENERAR ADVERTENCIA CLARA
+        # Generar advertencia general
         advertencia_general = None
         if not todas_seguras:
             if mejor_ruta_segura is None:
-                # 🚨 TODAS las rutas son peligrosas
                 if nivel_riesgo_minimo >= 4:
                     advertencia_general = f"⚠️ TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{ruta_menos_peligrosa}' (menos peligrosa)."
                 else:
                     advertencia_general = f"⚠️ Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{ruta_menos_peligrosa}'."
             else:
-                # ✅ Algunas rutas son seguras
                 advertencia_general = f"✅ Usa la ruta '{mejor_ruta_segura}' (segura). Evita las otras que pasan por zonas peligrosas."
         
-        # 🔥 CONTAR ZONAS ACTIVAS DEL USUARIO
-        total_zonas = db.query(ZonaPeligrosaUsuario).filter(
-            ZonaPeligrosaUsuario.usuario_id == current_user.id,
-            ZonaPeligrosaUsuario.activa == True
-        ).count()
+        # Contar zonas activas del usuario
+        total_zonas = len(zonas_propias)
         
         respuesta = ValidarRutasResponse(
             rutas_validadas=rutas_validadas,
             tipo_ml_recomendado=tipo_ml_recomendado,
             todas_seguras=todas_seguras,
-            mejor_ruta_segura=mejor_ruta_segura or ruta_menos_peligrosa,  # 🔥 Siempre devolver algo
+            mejor_ruta_segura=mejor_ruta_segura or ruta_menos_peligrosa,
             advertencia_general=advertencia_general,
-            total_zonas_usuario=total_zonas
+            total_zonas_usuario=total_zonas,
+            # 🚀 NUEVO: Agregar info de zonas públicas
+            zonas_publicas_encontradas=len(zonas_publicas_filtradas)
         )
         
-        # 🔥 LOG CRÍTICO PARA DEBUG
         logger.info(f"📊 VALIDACIÓN COMPLETA:")
         logger.info(f"   Todas seguras: {todas_seguras}")
         logger.info(f"   Mejor ruta: {mejor_ruta_segura or ruta_menos_peligrosa}")
+        logger.info(f"   Zonas públicas encontradas: {len(zonas_publicas_filtradas)}")
         logger.info(f"   Advertencia: {advertencia_general}")
-        logger.info(f"   Total zonas usuario: {total_zonas}")
         
         return respuesta
         
@@ -509,4 +602,159 @@ def verificar_ubicacion_actual(
         raise HTTPException(
             status_code=500,
             detail=f"Error al verificar ubicación: {str(e)}"
+        )
+    
+# ══════════════════════════════════════════════════════════
+# NUEVOS ENDPOINTS PARA ZONAS COMPARTIDAS
+# ══════════════════════════════════════════════════════════
+
+@router.get("/zonas-sugeridas", response_model=List[ZonaPeligrosaResponse])
+def obtener_zonas_sugeridas(
+    lat: float,
+    lon: float,
+    radio_km: float = 10.0,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    🌍 Obtiene zonas peligrosas PÚBLICAS cerca de una ubicación
+    
+    - Busca zonas de otros usuarios en un radio determinado
+    - Excluye las zonas que el usuario YA tiene guardadas
+    - Filtra por distancia al centro de cada zona
+    
+    **Caso de uso:** Usuario de Guayaquil visita Quevedo
+    """
+    try:
+        from .geometria import calcular_distancia_haversine
+        
+        # 1. Obtener TODAS las zonas activas de OTROS usuarios
+        zonas_publicas = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.usuario_id != current_user.id,
+            ZonaPeligrosaUsuario.activa == True
+        ).all()
+        
+        logger.info(f"📊 Total zonas públicas en BD: {len(zonas_publicas)}")
+        
+        # 2. Obtener IDs de zonas que el usuario YA tiene
+        zonas_propias = db.query(ZonaPeligrosaUsuario.id).filter(
+            ZonaPeligrosaUsuario.usuario_id == current_user.id,
+            ZonaPeligrosaUsuario.activa == True
+        ).all()
+        
+        ids_propias = {z.id for z in zonas_propias}
+        logger.info(f"🔒 Usuario tiene {len(ids_propias)} zonas propias")
+        
+        # 3. Filtrar zonas cercanas
+        zonas_cercanas = []
+        radio_metros = radio_km * 1000
+        
+        for zona in zonas_publicas:
+            # Saltar si el usuario ya tiene esta zona (caso improbable pero posible)
+            if zona.id in ids_propias:
+                continue
+            
+            # Obtener centro de la zona
+            centro = zona.poligono[0] if zona.poligono else None
+            if not centro:
+                continue
+            
+            # Calcular distancia
+            distancia = calcular_distancia_haversine(
+                lat, lon,
+                centro['lat'], centro['lon']
+            )
+            
+            # ¿Está dentro del radio?
+            if distancia <= radio_metros:
+                zonas_cercanas.append(zona)
+        
+        logger.info(f"✅ {len(zonas_cercanas)} zonas sugeridas para mostrar")
+        
+        return zonas_cercanas
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo zonas sugeridas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener zonas sugeridas: {str(e)}"
+        )
+
+
+@router.post("/adoptar-zona/{zona_id}", response_model=ZonaPeligrosaResponse)
+def adoptar_zona_sugerida(
+    zona_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    💾 Guarda una zona pública como zona PERSONAL del usuario
+    
+    **Flujo:**
+    1. Busca la zona original
+    2. Crea una COPIA para el usuario actual
+    3. Mantiene mismo nombre, nivel, coordenadas
+    4. El usuario ahora "tiene" esa zona
+    """
+    try:
+        # 1. Buscar zona original
+        zona_original = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.id == zona_id,
+            ZonaPeligrosaUsuario.activa == True
+        ).first()
+        
+        if not zona_original:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Zona sugerida no encontrada"
+            )
+        
+        # 2. Verificar que NO sea del usuario (seguridad)
+        if zona_original.usuario_id == current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Esta zona ya es tuya"
+            )
+        
+        # 3. Verificar que el usuario no tenga ya una zona con el mismo nombre
+        existe = db.query(ZonaPeligrosaUsuario).filter(
+            ZonaPeligrosaUsuario.usuario_id == current_user.id,
+            ZonaPeligrosaUsuario.nombre == zona_original.nombre,
+            ZonaPeligrosaUsuario.activa == True
+        ).first()
+        
+        if existe:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ya tienes una zona llamada '{zona_original.nombre}'"
+            )
+        
+        # 4. Crear COPIA de la zona para el usuario
+        nueva_zona = ZonaPeligrosaUsuario(
+            usuario_id=current_user.id,
+            nombre=zona_original.nombre,
+            poligono=zona_original.poligono,  # Copiar el polígono completo
+            nivel_peligro=zona_original.nivel_peligro,
+            tipo=zona_original.tipo,
+            notas=f"Adoptada de zona comunitaria • {zona_original.notas or ''}".strip(),
+            radio_metros=zona_original.radio_metros,
+            activa=True
+        )
+        
+        db.add(nueva_zona)
+        db.commit()
+        db.refresh(nueva_zona)
+        
+        logger.info(f"✅ Usuario {current_user.id} adoptó zona '{nueva_zona.nombre}' (ID: {nueva_zona.id})")
+        
+        return nueva_zona
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adoptando zona: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al adoptar zona: {str(e)}"
         )

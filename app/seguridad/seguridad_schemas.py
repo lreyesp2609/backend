@@ -122,3 +122,25 @@ class VerificarUbicacionResponse(BaseModel):
     hay_peligro: bool
     zonas_detectadas: List[ZonaPeligrosaDetectada]
     mensaje_alerta: Optional[str] = None
+
+
+class RutaValidada(BaseModel):
+    tipo: str
+    es_segura: bool
+    nivel_riesgo: int
+    zonas_detectadas: List[ZonaDetectada]
+    mensaje: Optional[str] = None
+    distancia: Optional[float] = None
+    duracion: Optional[float] = None
+    # 🚀 NUEVO
+    zonas_publicas_detectadas: Optional[List[dict]] = None  
+
+class ValidarRutasResponse(BaseModel):
+    rutas_validadas: List[RutaValidada]
+    tipo_ml_recomendado: str
+    todas_seguras: bool
+    mejor_ruta_segura: Optional[str] = None
+    advertencia_general: Optional[str] = None
+    total_zonas_usuario: int
+    # 🚀 NUEVO
+    zonas_publicas_encontradas: Optional[int] = None
