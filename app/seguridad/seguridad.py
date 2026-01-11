@@ -193,8 +193,12 @@ def validar_rutas_seguridad(
         for ruta in request.rutas:
             # Validar contra zonas PROPIAS
             validacion_propias = validador.validar_ruta(
-                geometry=ruta.geometry,
-                tipo_ruta=ruta.tipo
+                geometry_polyline=ruta.geometry,  # ✅ CORRECTO
+                metadata={
+                    'tipo': ruta.tipo,
+                    'distance': ruta.distance,
+                    'duration': ruta.duration
+                }
             )
             
             # 🚀 NUEVO: Validar contra zonas PÚBLICAS
