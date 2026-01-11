@@ -191,9 +191,12 @@ def validar_rutas_seguridad(
         rutas_validadas = []
         
         for ruta in request.rutas:
+            # ✅ PASO 1: Decodificar UNA SOLA VEZ (fuera de loops)
+            puntos_ruta = validador._decode_polyline(ruta.geometry)
+            
             # Validar contra zonas PROPIAS
             validacion_propias = validador.validar_ruta(
-                geometry_polyline=ruta.geometry,  # ✅ CORRECTO
+                geometry_polyline=ruta.geometry,
                 metadata={
                     'tipo': ruta.tipo,
                     'distance': ruta.distance,
@@ -205,12 +208,22 @@ def validar_rutas_seguridad(
             zonas_publicas_detectadas = []
 
             for zona_publica in zonas_publicas_filtradas:
-                # Validar si la ruta cruza esta zona pública
-                if validador._ruta_cruza_zona(ruta.geometry, zona_publica):
+                # ✅ USAR los puntos ya decodificados
+                resultado_zona = validador._analizar_zona_con_deteccion_puentes(
+                    zona_publica,
+                    puntos_ruta,  # ✅ Ya está decodificado
+                    metadata={
+                        'tipo': ruta.tipo,
+                        'distance': ruta.distance,
+                        'duration': ruta.duration
+                    }
+                )
+                
+                if resultado_zona['es_interseccion_real']:
                     centro = zona_publica.poligono[0] if zona_publica.poligono else None
                     if centro:
                         distancia_km = calcular_distancia_haversine(
-                            ubicacion_destino.latitud, ubicacion_destino.longitud,  # 🔥 CAMBIAR AQUÍ TAMBIÉN
+                            ubicacion_destino.latitud, ubicacion_destino.longitud,
                             centro['lat'], centro['lon']
                         ) / 1000.0
                         
@@ -220,7 +233,8 @@ def validar_rutas_seguridad(
                             'nivel_peligro': zona_publica.nivel_peligro,
                             'tipo': zona_publica.tipo,
                             'distancia_km': round(distancia_km, 1),
-                            'puede_guardar': True
+                            'puede_guardar': True,
+                            'porcentaje_ruta': resultado_zona['porcentaje']
                         })
             
             # Combinar zonas propias + públicas
