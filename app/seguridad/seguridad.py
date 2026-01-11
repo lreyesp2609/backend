@@ -152,23 +152,23 @@ def validar_rutas_seguridad(
         
         # 3️⃣ 🚀 NUEVO: Obtener zonas PÚBLICAS cerca del DESTINO
         from .geometria import calcular_distancia_haversine
-        
+
         zonas_publicas_cercanas = db.query(ZonaPeligrosaUsuario).filter(
             ZonaPeligrosaUsuario.usuario_id != current_user.id,
             ZonaPeligrosaUsuario.activa == True
         ).all()
-        
+
         # Filtrar por distancia al destino (10km)
         zonas_publicas_filtradas = []
         radio_busqueda_metros = 10_000  # 10km
-        
+
         for zona in zonas_publicas_cercanas:
             centro = zona.poligono[0] if zona.poligono else None
             if not centro:
                 continue
             
             distancia = calcular_distancia_haversine(
-                ubicacion_destino.lat, ubicacion_destino.lon,
+                ubicacion_destino.latitud, ubicacion_destino.longitud,  # 🔥 CAMBIAR lat → latitud, lon → longitud
                 centro['lat'], centro['lon']
             )
             
@@ -199,14 +199,14 @@ def validar_rutas_seguridad(
             
             # 🚀 NUEVO: Validar contra zonas PÚBLICAS
             zonas_publicas_detectadas = []
-            
+
             for zona_publica in zonas_publicas_filtradas:
                 # Validar si la ruta cruza esta zona pública
                 if validador._ruta_cruza_zona(ruta.geometry, zona_publica):
                     centro = zona_publica.poligono[0] if zona_publica.poligono else None
                     if centro:
                         distancia_km = calcular_distancia_haversine(
-                            ubicacion_destino.lat, ubicacion_destino.lon,
+                            ubicacion_destino.latitud, ubicacion_destino.longitud,  # 🔥 CAMBIAR AQUÍ TAMBIÉN
                             centro['lat'], centro['lon']
                         ) / 1000.0
                         
