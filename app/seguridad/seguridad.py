@@ -189,7 +189,10 @@ def validar_rutas_seguridad(
         
         # 5️⃣ Validar cada ruta contra TODAS las zonas (propias + públicas)
         rutas_validadas = []
-        
+
+        # 🔥 CREAR SET DE IDs DE ZONAS PROPIAS (ANTES DEL LOOP)
+        zonas_ids_propias = {z.id for z in zonas_propias}
+
         for ruta in request.rutas:
             # ✅ PASO 1: Decodificar UNA SOLA VEZ (fuera de loops)
             puntos_ruta = validador._decode_polyline(ruta.geometry)
@@ -204,13 +207,15 @@ def validar_rutas_seguridad(
                 }
             )
             
-            # 🚀 NUEVO: Validar contra zonas PÚBLICAS
-            zonas_ids_propias = {z.id for z in zonas_propias}
-
-            # Validar contra zonas PÚBLICAS
+            # 🚀 NUEVO: Validar contra zonas PÚBLICAS (SOLO SI NO SON TUYAS)
             zonas_publicas_detectadas = []
 
             for zona_publica in zonas_publicas_filtradas:
+                # 🔥 CRÍTICO: SALTAR SI ESTA ZONA ES TUYA
+                if zona_publica.id in zonas_ids_propias:
+                    logger.debug(f"⏭️ Saltando zona {zona_publica.id} (es del usuario)")
+                    continue
+                
                 resultado_zona = validador._analizar_zona_con_deteccion_puentes(
                     zona_publica,
                     puntos_ruta,
@@ -235,7 +240,7 @@ def validar_rutas_seguridad(
                             'nivel_peligro': zona_publica.nivel_peligro,
                             'tipo': zona_publica.tipo,
                             'distancia_km': round(distancia_km, 1),
-                            'puede_guardar': zona_publica.id not in zonas_ids_propias,  # 🔥 USA EL SET
+                            'puede_guardar': True,  # Siempre True porque ya filtramos arriba
                             'porcentaje_ruta': resultado_zona['porcentaje']
                         })
             
@@ -246,7 +251,7 @@ def validar_rutas_seguridad(
                     'nombre': z['nombre'],
                     'nivel_peligro': z['nivel_peligro'],
                     'tipo': z.get('tipo'),
-                    'porcentaje_ruta': 10.0  # Estimado
+                    'porcentaje_ruta': z['porcentaje_ruta']
                 }
                 for z in zonas_publicas_detectadas
             ]
