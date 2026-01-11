@@ -19,6 +19,18 @@ router = APIRouter(
     tags=["Seguridad en Rutas"]
 )
 
+
+def traducir_tipo_ruta(tipo_ingles: str) -> str:
+    """
+    Traduce los tipos de ruta de inglés a español
+    """
+    traducciones = {
+        "shortest": "Más corta",
+        "fastest": "Más rápida",
+        "recommended": "Recomendada"
+    }
+    return traducciones.get(tipo_ingles, tipo_ingles)
+
 # ==========================================
 # 1. MARCAR ZONA PELIGROSA
 # ==========================================
@@ -121,6 +133,10 @@ def obtener_mis_zonas_peligrosas(
 # 3. VALIDAR RUTAS (ENDPOINT MÁS IMPORTANTE)
 # ==========================================
 
+# ══════════════════════════════════════════════════════════
+# ENDPOINT /validar-rutas
+# ══════════════════════════════════════════════════════════
+
 @router.post("/validar-rutas", response_model=ValidarRutasResponse)
 def validar_rutas_seguridad(
     request: ValidarRutasRequest,
@@ -128,10 +144,6 @@ def validar_rutas_seguridad(
     current_user = Depends(get_current_user)
 ):
     try:
-        # ══════════════════════════════════════════════════════════
-        # 🔥 NUEVA LÓGICA: VALIDAR CONTRA ZONAS PROPIAS + PÚBLICAS
-        # ══════════════════════════════════════════════════════════
-        
         # 1️⃣ Obtener ubicación del destino
         ubicacion_destino = db.query(UbicacionUsuario).filter(
             UbicacionUsuario.id == request.ubicacion_id
@@ -149,12 +161,34 @@ def validar_rutas_seguridad(
             ZonaPeligrosaUsuario.usuario_id == current_user.id,
             ZonaPeligrosaUsuario.activa == True
         ).all()
+
+        # 🔥 CREAR SET DE IDs Y TAMBIÉN SET DE "HUELLAS" (nombre + coordenadas)
+        zonas_ids_propias = {z.id for z in zonas_propias}
+
+        # Crear huellas únicas para detectar zonas adoptadas (mismo nombre + coordenadas)
+        def crear_huella_zona(zona):
+            """Crea una huella única para comparar zonas (nombre + centro)"""
+            if not zona.poligono:
+                return None
+            centro = zona.poligono[0]
+            # Redondear a 5 decimales para evitar diferencias mínimas
+            lat = round(centro['lat'], 5)
+            lon = round(centro['lon'], 5)
+            return f"{zona.nombre.lower().strip()}:{lat}:{lon}"
+
+        huellas_propias = {
+            crear_huella_zona(z) for z in zonas_propias 
+            if crear_huella_zona(z) is not None
+        }
+
+        logger.info(f"🔒 Zonas propias del usuario: {len(zonas_propias)}")
+        logger.debug(f"🔍 Huellas propias: {huellas_propias}")
         
         # 3️⃣ 🚀 NUEVO: Obtener zonas PÚBLICAS cerca del DESTINO
         from .geometria import calcular_distancia_haversine
 
         zonas_publicas_cercanas = db.query(ZonaPeligrosaUsuario).filter(
-            ZonaPeligrosaUsuario.usuario_id != current_user.id,  # ✅ No incluir propias
+            ZonaPeligrosaUsuario.usuario_id != current_user.id,
             ZonaPeligrosaUsuario.activa == True
         ).all()
 
@@ -168,7 +202,7 @@ def validar_rutas_seguridad(
                 continue
             
             distancia = calcular_distancia_haversine(
-                ubicacion_destino.latitud, ubicacion_destino.longitud,  # 🔥 CAMBIAR lat → latitud, lon → longitud
+                ubicacion_destino.latitud, ubicacion_destino.longitud,
                 centro['lat'], centro['lon']
             )
             
@@ -176,7 +210,6 @@ def validar_rutas_seguridad(
                 zonas_publicas_filtradas.append(zona)
         
         logger.info(f"🌍 Zonas públicas cerca del destino: {len(zonas_publicas_filtradas)}")
-        logger.info(f"🔒 Zonas propias del usuario: {len(zonas_propias)}")
         
         # 4️⃣ Obtener recomendación de ML (UCB)
         ucb_service = UCBService(db)
@@ -190,11 +223,7 @@ def validar_rutas_seguridad(
         # 5️⃣ Validar cada ruta contra TODAS las zonas (propias + públicas)
         rutas_validadas = []
 
-        # 🔥 CREAR SET DE IDs DE ZONAS PROPIAS (ANTES DEL LOOP)
-        zonas_ids_propias = {z.id for z in zonas_propias}
-
         for ruta in request.rutas:
-            # ✅ PASO 1: Decodificar UNA SOLA VEZ (fuera de loops)
             puntos_ruta = validador._decode_polyline(ruta.geometry)
             
             # Validar contra zonas PROPIAS
@@ -207,15 +236,22 @@ def validar_rutas_seguridad(
                 }
             )
             
-            # 🚀 NUEVO: Validar contra zonas PÚBLICAS (SOLO SI NO SON TUYAS)
+            # 🚀 VALIDAR CONTRA ZONAS PÚBLICAS
             zonas_publicas_detectadas = []
 
             for zona_publica in zonas_publicas_filtradas:
-                # 🔥 CRÍTICO: SALTAR SI ESTA ZONA ES TUYA
+                # 🔥 VERIFICACIÓN 1: Saltar si es del usuario (por ID)
                 if zona_publica.id in zonas_ids_propias:
-                    logger.debug(f"⏭️ Saltando zona {zona_publica.id} (es del usuario)")
+                    logger.debug(f"⏭️ Saltando zona {zona_publica.id} (es del usuario por ID)")
                     continue
                 
+                # 🔥 VERIFICACIÓN 2: Saltar si es una zona ADOPTADA (mismo nombre + coords)
+                huella_publica = crear_huella_zona(zona_publica)
+                if huella_publica and huella_publica in huellas_propias:
+                    logger.debug(f"⏭️ Saltando zona '{zona_publica.nombre}' (adoptada por el usuario)")
+                    continue
+                
+                # Validar intersección
                 resultado_zona = validador._analizar_zona_con_deteccion_puentes(
                     zona_publica,
                     puntos_ruta,
@@ -240,7 +276,7 @@ def validar_rutas_seguridad(
                             'nivel_peligro': zona_publica.nivel_peligro,
                             'tipo': zona_publica.tipo,
                             'distancia_km': round(distancia_km, 1),
-                            'puede_guardar': True,  # Siempre True porque ya filtramos arriba
+                            'puede_guardar': True,
                             'porcentaje_ruta': resultado_zona['porcentaje']
                         })
             
@@ -295,7 +331,6 @@ def validar_rutas_seguridad(
                 mensaje=mensaje,
                 distancia=ruta.distance,
                 duracion=ruta.duration,
-                # 🚀 NUEVO: Agregar zonas públicas detectadas
                 zonas_publicas_detectadas=zonas_publicas_detectadas if zonas_publicas_detectadas else None
             )
             
@@ -321,13 +356,18 @@ def validar_rutas_seguridad(
         advertencia_general = None
         if not todas_seguras:
             if mejor_ruta_segura is None:
+                # 🔥 TRADUCIR nombre de ruta
+                nombre_ruta_traducido = traducir_tipo_ruta(ruta_menos_peligrosa)
+                
                 if nivel_riesgo_minimo >= 4:
-                    advertencia_general = f"⚠️ TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{ruta_menos_peligrosa}' (menos peligrosa)."
+                    advertencia_general = f"⚠️ TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{nombre_ruta_traducido}' (menos peligrosa)."
                 else:
-                    advertencia_general = f"⚠️ Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{ruta_menos_peligrosa}'."
+                    advertencia_general = f"⚠️ Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{nombre_ruta_traducido}'."
             else:
-                advertencia_general = f"✅ Usa la ruta '{mejor_ruta_segura}' (segura). Evita las otras que pasan por zonas peligrosas."
-        
+                # 🔥 TRADUCIR nombre de ruta
+                nombre_ruta_traducido = traducir_tipo_ruta(mejor_ruta_segura)
+                advertencia_general = f"✅ Usa la ruta '{nombre_ruta_traducido}' (segura). Evita las otras que pasan por zonas peligrosas."
+
         # Contar zonas activas del usuario
         total_zonas = len(zonas_propias)
         
@@ -335,13 +375,12 @@ def validar_rutas_seguridad(
             rutas_validadas=rutas_validadas,
             tipo_ml_recomendado=tipo_ml_recomendado,
             todas_seguras=todas_seguras,
-            mejor_ruta_segura=mejor_ruta_segura or ruta_menos_peligrosa,
+            mejor_ruta_segura=traducir_tipo_ruta(mejor_ruta_segura or ruta_menos_peligrosa),  # 🔥 TRADUCIR
             advertencia_general=advertencia_general,
             total_zonas_usuario=total_zonas,
-            # 🚀 NUEVO: Agregar info de zonas públicas
             zonas_publicas_encontradas=len(zonas_publicas_filtradas)
         )
-        
+                
         logger.info(f"📊 VALIDACIÓN COMPLETA:")
         logger.info(f"   Todas seguras: {todas_seguras}")
         logger.info(f"   Mejor ruta: {mejor_ruta_segura or ruta_menos_peligrosa}")
