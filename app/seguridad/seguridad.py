@@ -822,3 +822,4 @@ def adoptar_zona_sugerida(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al adoptar zona: {str(e)}"
         )
+        
