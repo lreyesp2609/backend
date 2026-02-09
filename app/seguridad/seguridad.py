@@ -360,9 +360,9 @@ def validar_rutas_seguridad(
                 nombre_ruta_traducido = traducir_tipo_ruta(ruta_menos_peligrosa)
                 
                 if nivel_riesgo_minimo >= 4:
-                    advertencia_general = f"⚠️ TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{nombre_ruta_traducido}' (menos peligrosa)."
+                    advertencia_general = f"TODAS las rutas pasan por zonas de ALTO RIESGO. Recomendamos la ruta '{nombre_ruta_traducido}' (menos peligrosa)."
                 else:
-                    advertencia_general = f"⚠️ Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{nombre_ruta_traducido}'."
+                    advertencia_general = f"Todas las rutas pasan por zonas con riesgo. Mantente alerta. Ruta recomendada: '{nombre_ruta_traducido}'."
             else:
                 # 🔥 TRADUCIR nombre de ruta
                 nombre_ruta_traducido = traducir_tipo_ruta(mejor_ruta_segura)
