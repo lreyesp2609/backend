@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, status  # 👈 Agrega status aquí
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware  # 🆕 AGREGAR
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .database.config import settings
 from .database.database import *
 from .usuarios.models import *
@@ -35,11 +35,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🆕 AGREGAR: TrustedHost para WebSockets en Render.com
+# TrustedHost para WebSockets
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["*"]
 )
+
+# 🆕 AGREGAR ESTE ENDPOINT DE HEALTH CHECK
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """
+    Endpoint de health check para Azure Container Apps.
+    Verifica que la aplicación está corriendo y la DB conectada.
+    """
+    logger.info("🏥 Health check solicitado")
+    
+    health_status = {
+        "status": "healthy",
+        "app": settings.app_name,
+        "version": "1.0.0",
+        "database": "unknown"
+    }
+    
+    # Verificar conexión a base de datos
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        health_status["database"] = "connected"
+        logger.info("✅ Health check: DB conectada")
+    except Exception as e:
+        health_status["database"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+        logger.error(f"❌ Health check: DB error - {e}")
+    
+    return health_status
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -47,9 +78,6 @@ async def startup_event():
     
     if test_connection():
         logger.info("✅ Base de datos conectada correctamente")
-        
-        # ❌ ELIMINAR ESTA LÍNEA:
-        # configure_relationships()
         
         # PASO 1: Crear tablas
         create_tables()
