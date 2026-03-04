@@ -9,13 +9,16 @@ class Settings(BaseSettings):
     db_user: str
     db_password: str
     db_host: str
-    db_port: int = 6543    # ← CAMBIÉ DE 6543 A 5432
+    db_port: int = 6543
     db_name: str = "postgres"
     
     # Seguridad
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
+    
+    # API Configuration
+    api_base_url: str  # ← AGREGA ESTA LÍNEA
     
     # CORS
     allowed_origins: List[str] = [

@@ -105,4 +105,5 @@ def decodificar(
         "activo": usuario.activo,
         "id_rol": usuario.rol.id,
         "rol": usuario.rol.nombre,
+        "correo": usuario.usuario,
     })

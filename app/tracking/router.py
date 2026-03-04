@@ -348,40 +348,51 @@ async def reanalizar_patron(
         
 
 @router.post("/debug/forzar-notificacion/{usuario_id}/{ubicacion_destino_id}")
-async def forzar_notificacion_predictibilidad(  # ✅ async aquí
+async def forzar_notificacion_predictibilidad(
     usuario_id: int,
     ubicacion_destino_id: int,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    🔧 DEBUG: Forzar envío de notificación de predictibilidad
+    🔧 Fuerza envío de notificación aunque no exista patrón previo
     """
+    # Buscar patrón existente o CREAR UNO TEMPORAL para poder enviar
     patron = db.query(PatronPredictibilidad).filter(
         PatronPredictibilidad.usuario_id == usuario_id,
         PatronPredictibilidad.ubicacion_destino_id == ubicacion_destino_id
     ).first()
-    
+
     if not patron:
-        return {"error": "Patrón no encontrado"}
-    
+        # ✅ CREAR patrón mínimo para que _enviar_notificacion funcione
+        patron = PatronPredictibilidad(
+            usuario_id=usuario_id,
+            ubicacion_destino_id=ubicacion_destino_id,
+            total_viajes=0,
+            viajes_ruta_similar=0,
+            predictibilidad=1.0,   # Forzado al máximo
+            es_predecible=True,
+            notificacion_enviada=False
+        )
+        db.add(patron)
+        db.flush()   # Obtener ID sin commitear aún
+
     service = PassiveTrackingService(db)
-    
-    # ✅ AGREGAR await
     resultado = await service._enviar_notificacion_predictibilidad(
-        usuario_id, 
-        ubicacion_destino_id, 
+        usuario_id,
+        ubicacion_destino_id,
         patron.predictibilidad
     )
-    
-    # Marcar como enviada
+
+    # Marcar como enviada (ignorar cooldown, es forzado)
     patron.notificacion_enviada = True
     patron.fecha_ultima_notificacion = datetime.utcnow()
     db.commit()
-    
+
     return {
-        "success": True, 
-        "message": "Notificación enviada",
+        "success": True,
+        "message": "Notificación enviada (forzada)",
+        "patron_creado": patron.total_viajes == 0,   # True si lo creamos aquí
         "predictibilidad": patron.predictibilidad,
         "resultado_fcm": resultado
     }
